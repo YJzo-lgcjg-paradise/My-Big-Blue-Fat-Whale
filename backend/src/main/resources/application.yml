@@ -1,0 +1,45 @@
+server:
+  port: ${PORT:8787}
+  address: 127.0.0.1
+
+spring:
+  application:
+    name: dayufish
+  datasource:
+    url: jdbc:h2:file:${dayufish.data.dir:./data}/memory;DB_CLOSE_DELAY=-1;MODE=LEGACY
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: false
+  h2:
+    console:
+      enabled: false
+      path: /h2-console
+  jackson:
+    default-property-inclusion: non_null
+
+dayufish:
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY:}
+    base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com}
+    model: ${DEEPSEEK_MODEL:deepseek-chat}
+  zhipu:
+    api-key: ${ZHIPU_API_KEY:}
+    base-url: ${ZHIPU_BASE_URL:https://open.bigmodel.cn/api/paas/v4}
+    model: ${ZHIPU_EMBED_MODEL:embedding-3}
+  recall:
+    half-life-days: 30
+    weight-similarity: 0.68
+    weight-recency: 0.16
+    weight-strength: 0.09
+    weight-importance: 0.07
+
+logging:
+  level:
+    org.hibernate.SQL: warn

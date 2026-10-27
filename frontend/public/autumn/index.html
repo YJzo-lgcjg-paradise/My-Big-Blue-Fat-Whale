@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>落叶与阳光 · HTML Demo</title>
+  <style>
+    :root {
+      --ink: #070503;
+      --gold: #e8c56a;
+      --gold-soft: #c9a24a;
+      --mist: rgba(255, 236, 190, 0.72);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: var(--ink);
+      color: var(--mist);
+      font-family: "Songti SC", "Noto Serif SC", "STSong", "SimSun", serif;
+    }
+
+    .stage {
+      position: fixed;
+      inset: 0;
+      background: #000;
+    }
+
+    .stage iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+      background: #000;
+    }
+
+    .veil {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 2;
+      background:
+        radial-gradient(ellipse 55% 45% at 42% 38%, rgba(255, 190, 80, 0.12), transparent 70%),
+        linear-gradient(180deg, rgba(0,0,0,0.35) 0%, transparent 28%, transparent 62%, rgba(0,0,0,0.55) 100%);
+    }
+
+    .brand {
+      position: fixed;
+      left: clamp(1.25rem, 4vw, 3rem);
+      bottom: clamp(1.5rem, 5vh, 3.5rem);
+      z-index: 3;
+      pointer-events: none;
+      max-width: min(28rem, 86vw);
+    }
+
+    .brand h1 {
+      font-size: clamp(1.85rem, 4.5vw, 3.1rem);
+      font-weight: 400;
+      letter-spacing: 0.28em;
+      color: #f3e2b0;
+      text-shadow: 0 0 28px rgba(232, 197, 106, 0.35), 0 2px 18px rgba(0,0,0,0.65);
+      line-height: 1.25;
+      margin-bottom: 0.55rem;
+    }
+
+    .brand p {
+      font-size: clamp(0.85rem, 1.5vw, 1.05rem);
+      letter-spacing: 0.18em;
+      color: rgba(243, 226, 176, 0.72);
+      text-shadow: 0 1px 10px rgba(0,0,0,0.7);
+      line-height: 1.7;
+    }
+
+    .controls {
+      position: fixed;
+      right: clamp(1rem, 3vw, 2rem);
+      top: clamp(1rem, 3vh, 2rem);
+      z-index: 4;
+      display: flex;
+      gap: 0.65rem;
+      align-items: center;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid rgba(232, 197, 106, 0.35);
+      background: rgba(8, 5, 2, 0.45);
+      color: var(--gold);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-radius: 999px;
+      padding: 0.55rem 1rem;
+      font-size: 0.82rem;
+      letter-spacing: 0.16em;
+      cursor: pointer;
+      font-family: inherit;
+      transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+    }
+
+    .btn:hover {
+      border-color: rgba(232, 197, 106, 0.7);
+      background: rgba(20, 12, 4, 0.65);
+      color: #ffe9ad;
+    }
+
+    .btn.is-muted {
+      color: rgba(232, 197, 106, 0.45);
+      border-color: rgba(232, 197, 106, 0.18);
+    }
+
+    .hint {
+      position: fixed;
+      right: clamp(1rem, 3vw, 2rem);
+      bottom: clamp(1rem, 3vh, 2rem);
+      z-index: 3;
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      color: rgba(243, 226, 176, 0.4);
+      pointer-events: none;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+
+    @media (max-width: 640px) {
+      .brand h1 { letter-spacing: 0.18em; }
+      .brand p { letter-spacing: 0.08em; }
+      .hint { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="stage" aria-hidden="true">
+    <iframe id="sceneFrame" src="scene/index.html" title="落叶与阳光场景" allow="autoplay"></iframe>
+  </div>
+
+  <div class="veil"></div>
+
+  <div class="brand">
+    <h1>落叶与阳光</h1>
+    <p>金叶翻飞 · 光从雾里来</p>
+  </div>
+
+  <div class="controls">
+    <button type="button" class="btn is-muted" id="musicBtn" aria-pressed="false">音乐 开</button>
+  </div>
+
+  <p class="hint">素材来自 Wallpaper Engine「落叶与阳光」</p>
+
+  <audio id="bgm" loop preload="auto">
+    <source src="autumn_loop.ogg" type="audio/ogg" />
+    <source src="autumn_loop.mp3" type="audio/mpeg" />
+  </audio>
+
+  <script>
+    (function () {
+      var audio = document.getElementById("bgm");
+      var btn = document.getElementById("musicBtn");
+      var frame = document.getElementById("sceneFrame");
+      var wanted = false;
+
+      function sync() {
+        var on = !audio.paused;
+        btn.textContent = on ? "音乐 关" : "音乐 开";
+        btn.classList.toggle("is-muted", !on);
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+      }
+
+      btn.addEventListener("click", function () {
+        if (audio.paused) {
+          wanted = true;
+          audio.volume = 0.45;
+          audio.play().then(sync).catch(sync);
+        } else {
+          wanted = false;
+          audio.pause();
+          sync();
+        }
+      });
+
+      function unlockOnce() {
+        if (!wanted) return;
+        audio.play().then(sync).catch(function () {});
+      }
+      document.addEventListener("pointerdown", unlockOnce, { once: true });
+
+      // 外壳把鼠标位置传给场景，保证光柱在全页都能跟手
+      function sendMouse(e) {
+        if (!frame || !frame.contentWindow) return;
+        var x = (e.clientX / window.innerWidth) * 2 - 1;
+        var y = -(e.clientY / window.innerHeight) * 2 + 1;
+        frame.contentWindow.postMessage({ type: "autumn-mouse", x: x, y: y }, "*");
+      }
+      window.addEventListener("mousemove", sendMouse, { passive: true });
+      window.addEventListener("touchmove", function (e) {
+        if (!e.changedTouches || !e.changedTouches.length) return;
+        var t = e.changedTouches[0];
+        sendMouse({ clientX: t.clientX, clientY: t.clientY });
+      }, { passive: true });
+
+      audio.addEventListener("play", sync);
+      audio.addEventListener("pause", sync);
+      sync();
+    })();
+  </script>
+</body>
+</html>

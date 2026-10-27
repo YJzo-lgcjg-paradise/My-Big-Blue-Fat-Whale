@@ -1,0 +1,10 @@
+# 可选：接自己的 MySQL（默认用内置 H2，单文件、零配置）
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/dayufish?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: update
