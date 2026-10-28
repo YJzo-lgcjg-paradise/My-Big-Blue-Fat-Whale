@@ -184,6 +184,22 @@ export const api = {
     req<{ items: { id: number; question: string; answer: string }[] }>(
       `/api/spaces/${spaceId}/style/candidates?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
+  getOther: (spaceId: number) =>
+    req<{ text: string; prompt: string }>(`/api/spaces/${spaceId}/persona/other`),
+  generateOtherPrompt: (spaceId: number) =>
+    req<{ prompt: string }>(`/api/spaces/${spaceId}/persona/other/prompt`, { method: "POST" }),
+  saveOtherPrompt: (spaceId: number, prompt: string) =>
+    req<{ prompt: string }>(`/api/spaces/${spaceId}/persona/other/prompt/save`, {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    }),
+  generateOther: (spaceId: number) =>
+    req<{ text: string; basis: string[] }>(`/api/spaces/${spaceId}/persona/other`, { method: "POST" }),
+  saveOther: (spaceId: number, text: string) =>
+    req<{ text: string }>(`/api/spaces/${spaceId}/persona/other/save`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
   getContextMode: (spaceId: number) => req<{ mode: string }>(`/api/spaces/${spaceId}/context-mode`),
   setContextMode: (spaceId: number, mode: string) =>
     req<{ mode: string }>(`/api/spaces/${spaceId}/context-mode`, {

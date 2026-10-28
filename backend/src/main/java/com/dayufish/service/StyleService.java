@@ -5,6 +5,8 @@ import com.dayufish.domain.Space;
 import com.dayufish.repo.MemoryRepository;
 import com.dayufish.repo.EpisodeRepository;
 import com.dayufish.repo.TextHistoryRepository;
+import com.dayufish.repo.TreasureRepository;
+import com.dayufish.domain.Treasure;
 import com.dayufish.domain.TextHistory;
 import com.dayufish.domain.Episode;
 import com.dayufish.repo.SpaceRepository;
@@ -29,6 +31,34 @@ public class StyleService {
 
     private static final Logger log = LoggerFactory.getLogger(StyleService.class);
 
+
+    private static final String OTHER_SYSTEM = """
+            你在整理一个长期记忆体里「他是谁」的资料卡。
+
+            素材：这个记忆体已整理的事件日记（含关系备注、未完成线头）、对话原文抽样、已有的「我是谁」、以及双方独有的回忆。
+            要求：
+            1. 只填素材里明确出现过的事实；不确定的字段留空字符串，绝不推测、不补全。
+               原文里出现的具体信息（姓名、年龄、职业、所在城市、家人、口味、习惯用的工具）优先采用。
+            2. 不要写语气风格，不要描述两人怎么相处，只要事实性资料。
+            3. 输出 JSON：
+               {"profile":{"name":"","age":"","occupation":"","location":"","family":""},
+                "likes":{"food":"","dislikes":"","tools":""},
+                "pacts":["说好的称呼：…","约定：…","暗号：…"],
+                "history":["他的过往经历，一条一句，最多 10 条"],
+                "together":["他和我的经历，一条一句，最多 8 条"],
+                "summary":"一句话概括他是谁，30 字以内"}
+            4. profile 里：
+               name 是他怎么被称呼的名字或昵称（真名、笔名、网名都算）；
+               age 写年龄；原文只给了出生年月就写出生年月；
+               occupation 写职业或身份，「在读 / 学生 / 求学」也算；
+               location 写他所在的城市；
+               family 写家人关系。都没有就留空。
+            5. likes 里：food 写爱吃与讨厌吃（原文提过的食物、口味都算）；
+               dislikes 写他讨厌的事；tools 写他习惯用的工具、软件或做法。
+            6. pacts 每条形如「类别：内容」，最多 8 条；没有就给空数组。
+            7. history 写他本人的过往（读书、搬家、做过的事、来处），只写素材里出现过的，每条不超过 30 字。
+            8. together 写他和「我」一起经历过的事（一起改稿、约定、说过的难忘的话），每条不超过 30 字。
+            """;
 
     private static final String SELF_SYSTEM = """
             你在为一个长期记忆体写「我是谁」的第一人称自述。
@@ -62,6 +92,7 @@ public class StyleService {
     private final MemoryRepository memories;
     private final EpisodeRepository episodes;
     private final TextHistoryRepository history;
+    private final TreasureRepository treasures;
     private final ObjectMapper mapper;
     private final RestClient http;
     private final LlmSettings llm;
@@ -73,11 +104,13 @@ public class StyleService {
                 return th;
             });
 
-    public StyleService(SpaceRepository spaces, MemoryRepository memories, EpisodeRepository episodes, TextHistoryRepository history, ObjectMapper mapper, LlmSettings llm) {
+    public StyleService(SpaceRepository spaces, MemoryRepository memories, EpisodeRepository episodes, TextHistoryRepository history, TreasureRepository treasures,
+            ObjectMapper mapper, LlmSettings llm) {
         this.spaces = spaces;
         this.memories = memories;
         this.episodes = episodes;
         this.history = history;
+        this.treasures = treasures;
         this.mapper = mapper;
         this.llm = llm;
         this.http = RestClient.builder().build();
@@ -120,7 +153,9 @@ public class StyleService {
 
     /** 覆盖前把旧版本存一份，供「查看过往」 */
     private void remember(Space space, String kind) {
-        String old = "self".equals(kind) ? space.getPersonaSelf() : space.getStyleProfile();
+        String old = "self".equals(kind) ? space.getPersonaSelf()
+                : "other".equals(kind) ? space.getPersonaOther()
+                : space.getStyleProfile();
         if (old != null && !old.isBlank()) {
             TextHistory h = new TextHistory();
             h.setSpaceId(space.getId());
@@ -210,6 +245,249 @@ public class StyleService {
         space.setPersonaSelfAt(Instant.now());
         spaces.save(space);
         return new Self(space.getPersonaSelf(), List.of(), space.getPersonaSelfAt());
+    }
+
+    /** 结构化资料卡：{profile, likes, pacts, summary} */
+    public String generateOther(Long spaceId) {
+        Space space = spaces.findById(spaceId).orElseThrow(() -> new IllegalArgumentException("记忆体不存在"));
+        if (!llm.enabled()) {
+            throw new IllegalStateException("没有配置模型 key，先在右上角 API 里填一个");
+        }
+        List<Episode> eps = episodes.findBySpaceIdOrderByStartedAtDesc(spaceId);
+        StringBuilder sb = new StringBuilder();
+        int n = 0;
+        for (Episode e : eps) {
+            if (!"ready".equals(e.getStatus()) || e.getDiary() == null || e.getDiary().isBlank()) {
+                continue;
+            }
+            sb.append("【").append(e.getTitle()).append("】").append(clip(e.getDiary(), 300)).append('\n');
+            if (e.getRelationNote() != null && !e.getRelationNote().isBlank()) {
+                sb.append("关系：").append(clip(e.getRelationNote(), 120)).append('\n');
+            }
+            if (++n >= 40) {
+                break;
+            }
+        }
+        if (n == 0) {
+            throw new IllegalStateException("这个记忆体还没有整理好的事件，先导入对话");
+        }
+        if (space.getPersonaSelf() != null && !space.getPersonaSelf().isBlank()) {
+            sb.append("【我是谁】\n").append(clip(space.getPersonaSelf(), 500)).append('\n');
+        }
+        // 原文抽样：姓名、职业、口味这类事实往往只在原话里
+        List<Memory> rows = memories.findBySpaceIdOrderByOccurredAtDesc(spaceId);
+        StringBuilder raw2 = new StringBuilder();
+        int taken = 0;
+        for (Memory m : rows) {
+            if (!"ready".equals(m.getStatus())) {
+                continue;
+            }
+            String q = clip(m.getQuestion(), 160);
+            String a = clip(m.getAnswer(), 260);
+            if (q.isBlank() && a.isBlank()) {
+                continue;
+            }
+            raw2.append("他：").append(q).append('\n').append("我：").append(a).append('\n');
+            if (++taken >= 60) {
+                break;
+            }
+        }
+        if (raw2.length() > 0) {
+            sb.append("【对话原文抽样（最近 ").append(taken).append(" 轮）】\n").append(raw2).append('\n');
+        }
+        List<Treasure> ts = treasures.findBySpaceIdOrderByIdDesc(spaceId);
+        if (!ts.isEmpty()) {
+            sb.append("【双方独有的回忆】\n");
+            int c = 0;
+            for (Treasure tr : ts) {
+                sb.append("- ").append(tr.getTitle()).append("：").append(clip(tr.getText(), 120)).append('\n');
+                if (++c >= 10) {
+                    break;
+                }
+            }
+        }
+
+        String raw;
+        try {
+            raw = callJson(OTHER_SYSTEM, sb.toString());
+        } catch (Exception e) {
+            throw new IllegalStateException("生成失败：" + e.getMessage());
+        }
+        JsonNode node;
+        try {
+            node = mapper.readTree(raw);
+        } catch (Exception e) {
+            throw new IllegalStateException("模型返回的不是 JSON");
+        }
+        if (!node.has("profile") && !node.has("summary")) {
+            throw new IllegalStateException("模型没有给出资料卡");
+        }
+        remember(space, "other");
+        space.setPersonaOther(node.toString());
+        space.setPersonaOtherAt(Instant.now());
+        spaces.save(space);
+        return space.getPersonaOther();
+    }
+
+    private static final String OTHER_PROMPT_SYSTEM = """
+            你在为长期记忆体写一段「他是谁」的提示词，这段会每轮发给模型。
+
+            输入：他的资料卡（画像 / 喜好 / 约定 / 过往经历 / 和我的经历）、双方独有的回忆。
+            要求：
+            1. 写成 80–160 字的一段话，第一人称，像「我记住了这个人」。
+            2. 不要罗列字段、不要分点、不要加标题。
+            3. 必须带：怎么称呼他、他是什么样的人、我们之间约定过的暗号或规则。
+            4. 只用输入里有的内容，不推测、不补全。
+            5. 输出 JSON：{"prompt":"..."}
+            """;
+
+    /** 由资料卡生成「他是谁」的提示词片段（与资料卡分开生成） */
+    public String generateOtherPrompt(Long spaceId) {
+        Space space = spaces.findById(spaceId).orElseThrow(() -> new IllegalArgumentException("记忆体不存在"));
+        if (!llm.enabled()) {
+            throw new IllegalStateException("没有配置模型 key");
+        }
+        String card = space.getPersonaOther() == null ? "" : space.getPersonaOther().trim();
+        if (card.isBlank()) {
+            throw new IllegalStateException("先生成资料卡");
+        }
+        StringBuilder sb = new StringBuilder("【资料卡】\n").append(clip(card, 1800)).append('\n');
+        var ts = treasures.findBySpaceIdOrderByIdDesc(spaceId);
+        if (!ts.isEmpty()) {
+            sb.append("【回忆】\n");
+            int c = 0;
+            for (var tr : ts) {
+                sb.append("- ").append(tr.getTitle()).append("：").append(clip(tr.getText(), 100)).append('\n');
+                if (++c >= 8) {
+                    break;
+                }
+            }
+        }
+        String raw;
+        try {
+            raw = callJson(OTHER_PROMPT_SYSTEM, sb.toString());
+        } catch (Exception e) {
+            throw new IllegalStateException("生成失败：" + e.getMessage());
+        }
+        String text = "";
+        try {
+            text = mapper.readTree(raw).path("prompt").asText("").trim();
+        } catch (Exception ignored) {
+        }
+        if (text.isBlank()) {
+            throw new IllegalStateException("模型没有给出提示词");
+        }
+        space.setPersonaOtherPrompt(clip(text, 3900));
+        space.setPersonaOtherPromptAt(Instant.now());
+        spaces.save(space);
+        return space.getPersonaOtherPrompt();
+    }
+
+    public String saveOtherPrompt(Long spaceId, String text) {
+        Space space = spaces.findById(spaceId).orElseThrow(() -> new IllegalArgumentException("记忆体不存在"));
+        space.setPersonaOtherPrompt(text == null ? "" : clip(text, 3900));
+        space.setPersonaOtherPromptAt(Instant.now());
+        spaces.save(space);
+        return space.getPersonaOtherPrompt();
+    }
+
+    public String otherPromptText(Long spaceId) {
+        return spaces.findById(spaceId)
+                .map(s -> s.getPersonaOtherPrompt() == null ? "" : s.getPersonaOtherPrompt()).orElse("");
+    }
+
+    public String saveOther(Long spaceId, String json) {
+        Space space = spaces.findById(spaceId).orElseThrow(() -> new IllegalArgumentException("记忆体不存在"));
+        remember(space, "other");
+        space.setPersonaOther(json == null ? "" : clip(json, 3900));
+        space.setPersonaOtherAt(Instant.now());
+        spaces.save(space);
+        return space.getPersonaOther();
+    }
+
+    public String otherText(Long spaceId) {
+        return spaces.findById(spaceId).map(s -> s.getPersonaOther() == null ? "" : s.getPersonaOther()).orElse("");
+    }
+
+    /** 渲染成能直接塞进提示词的一段 */
+    public String otherBlock(Long spaceId) {
+        String prompt = otherPromptText(spaceId);
+        if (prompt != null && !prompt.isBlank()) {
+            StringBuilder sb = new StringBuilder(prompt.trim()).append('\n');
+            var ts = treasures.findBySpaceIdOrderByIdDesc(spaceId);
+            if (!ts.isEmpty()) {
+                sb.append("〔可以提起的回忆〕只在与当前话题自然相关时提，不要硬带：\n");
+                int c = 0;
+                for (var tr : ts) {
+                    sb.append("- ").append(tr.getTitle()).append("：").append(clip(tr.getText(), 90)).append('\n');
+                    if (++c >= 6) {
+                        break;
+                    }
+                }
+            }
+            return sb.toString().trim();
+        }
+        String raw = otherText(spaceId);
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        JsonNode node;
+        try {
+            node = mapper.readTree(raw);
+        } catch (Exception e) {
+            return raw.trim(); // 老格式：纯文本
+        }
+        JsonNode profile = node.path("profile");
+        JsonNode likes = node.path("likes");
+        StringBuilder sb = new StringBuilder();
+        List<String> facts = new ArrayList<>();
+        addFact(facts, "称呼", profile.path("name").asText(""));
+        addFact(facts, "年龄", profile.path("age").asText(""));
+        addFact(facts, "职业", profile.path("occupation").asText(""));
+        addFact(facts, "所在地", profile.path("location").asText(""));
+        addFact(facts, "家人", profile.path("family").asText(""));
+        if (!facts.isEmpty()) {
+            sb.append("画像｜").append(String.join("；", facts)).append('\n');
+        }
+        List<String> likesList = new ArrayList<>();
+        addFact(likesList, "爱吃", likes.path("food").asText(""));
+        addFact(likesList, "讨厌", likes.path("dislikes").asText(""));
+        addFact(likesList, "习惯", likes.path("tools").asText(""));
+        if (!likesList.isEmpty()) {
+            sb.append("喜好｜").append(String.join("；", likesList)).append('\n');
+        }
+        List<String> pacts = new ArrayList<>();
+        for (JsonNode p : node.path("pacts")) {
+            String s = p.asText("").trim();
+            if (!s.isEmpty()) {
+                pacts.add(s);
+            }
+        }
+        if (!pacts.isEmpty()) {
+            sb.append("约定｜").append(String.join("；", pacts)).append('\n');
+        }
+        String summary = node.path("summary").asText("").trim();
+        if (!summary.isEmpty()) {
+            sb.append("一句话：").append(summary).append('\n');
+        }
+        List<Treasure> ts = treasures.findBySpaceIdOrderByIdDesc(spaceId);
+        if (!ts.isEmpty()) {
+            sb.append("〔可以提起的回忆〕只在与当前话题自然相关时提，不要硬带：\n");
+            int c = 0;
+            for (Treasure tr : ts) {
+                sb.append("- ").append(tr.getTitle()).append("：").append(clip(tr.getText(), 90)).append('\n');
+                if (++c >= 6) {
+                    break;
+                }
+            }
+        }
+        return sb.toString().trim();
+    }
+
+    private static void addFact(List<String> list, String label, String value) {
+        if (value != null && !value.isBlank()) {
+            list.add(label + "：" + value.trim());
+        }
     }
 
     public String selfText(Long spaceId) {

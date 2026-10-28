@@ -21,8 +21,28 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
   } | null>(null);
   const [styleBusy, setStyleBusy] = useState(false);
   const [selfText, setSelfText] = useState("");
+  const [other, setOther] = useState<{
+    profile: { name: string; age: string; occupation: string; location: string; family: string };
+    likes: { food: string; dislikes: string; tools: string };
+    pacts: string[];
+    history: string[];
+    together: string[];
+    summary: string;
+  }>({
+    profile: { name: "", age: "", occupation: "", location: "", family: "" },
+    likes: { food: "", dislikes: "", tools: "" },
+    pacts: [],
+    history: [],
+    together: [],
+    summary: "",
+  });
+  const [otherPrompt, setOtherPrompt] = useState("");
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [otherLegacy, setOtherLegacy] = useState("");
+  const [otherBusy, setOtherBusy] = useState(false);
+  const [treasures, setTreasures] = useState<{ id: number; title: string; text: string }[]>([]);
   const [ctxMode, setCtxMode] = useState<"budget" | "precision">("budget");
-  const [historyKind, setHistoryKind] = useState<"self" | "style" | null>(null);
+  const [historyKind, setHistoryKind] = useState<"self" | "other" | "style" | null>(null);
   const [historyItems, setHistoryItems] = useState<{ id: number; text: string; createdAt: string }[]>([]);
   const [selfBasis, setSelfBasis] = useState<string[]>([]);
   const [selfBusy, setSelfBusy] = useState(false);
@@ -44,6 +64,36 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
       if (s) {
         setStyle(s);
         api.getSelf(spaceId).then((r) => setSelfText(r.text || "")).catch(() => {});
+        api.getOther(spaceId).then((r) => {
+          setOtherPrompt(r.prompt || "");
+          const raw = (r.text || "").trim();
+          if (!raw) return;
+          try {
+            const o = JSON.parse(raw);
+            setOther({
+              profile: {
+                name: o.profile?.name || "",
+                age: o.profile?.age || "",
+                occupation: o.profile?.occupation || "",
+                location: o.profile?.location || "",
+                family: o.profile?.family || "",
+              },
+              likes: {
+                food: o.likes?.food || "",
+                dislikes: o.likes?.dislikes || "",
+                tools: o.likes?.tools || "",
+              },
+              pacts: Array.isArray(o.pacts) ? o.pacts : [],
+              history: Array.isArray(o.history) ? o.history : [],
+              together: Array.isArray(o.together) ? o.together : [],
+              summary: o.summary || "",
+            });
+            setOtherLegacy("");
+          } catch {
+            setOtherLegacy(raw);
+          }
+        }).catch(() => {});
+        api.treasures(spaceId).then((r) => setTreasures(r.items.map((x: any) => ({ id: x.id, title: x.title, text: x.text })))).catch(() => {});
         api.getContextMode(spaceId).then((r) => setCtxMode(r.mode === "precision" ? "precision" : "budget")).catch(() => {});
         const ids = (s.picks || []).map((p) => p.id);
         setPicked(ids);
@@ -58,7 +108,7 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
     });
   }, [spaceId]);
 
-  async function openHistory(kind: "self" | "style") {
+  async function openHistory(kind: "self" | "other" | "style") {
     setHistoryKind(kind);
     setHistoryItems([]);
     try {
@@ -80,6 +130,75 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
       toast(e.message || "生成失败");
     } finally {
       setSelfBusy(false);
+    }
+  }
+
+  async function genOther() {
+    setOtherBusy(true);
+    try {
+      const res = await api.generateOther(spaceId);
+      const o = JSON.parse(res.text || "{}");
+      setOther({
+        profile: {
+          name: o.profile?.name || "",
+          age: o.profile?.age || "",
+          occupation: o.profile?.occupation || "",
+          location: o.profile?.location || "",
+          family: o.profile?.family || "",
+        },
+        likes: {
+          food: o.likes?.food || "",
+          dislikes: o.likes?.dislikes || "",
+          tools: o.likes?.tools || "",
+        },
+        pacts: Array.isArray(o.pacts) ? o.pacts : [],
+        history: Array.isArray(o.history) ? o.history : [],
+        together: Array.isArray(o.together) ? o.together : [],
+        summary: o.summary || "",
+      });
+      setOtherLegacy("");
+      toast("资料卡已生成");
+    } catch (e: any) {
+      toast(e.message || "生成失败");
+    } finally {
+      setOtherBusy(false);
+    }
+  }
+
+  async function genOtherPrompt() {
+    setPromptBusy(true);
+    try {
+      const res = await api.generateOtherPrompt(spaceId);
+      setOtherPrompt(res.prompt || "");
+      toast("提示词已生成");
+    } catch (e: any) {
+      toast(e.message || "生成失败");
+    } finally {
+      setPromptBusy(false);
+    }
+  }
+
+  async function savePromptText() {
+    setPromptBusy(true);
+    try {
+      await api.saveOtherPrompt(spaceId, otherPrompt);
+      toast("提示词已保存");
+    } catch (e: any) {
+      toast(e.message || "保存失败");
+    } finally {
+      setPromptBusy(false);
+    }
+  }
+
+  async function saveOtherText() {
+    setOtherBusy(true);
+    try {
+      await api.saveOther(spaceId, JSON.stringify(other));
+      toast("已保存");
+    } catch (e: any) {
+      toast(e.message || "保存失败");
+    } finally {
+      setOtherBusy(false);
     }
   }
 
@@ -278,6 +397,160 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
       </div>
 
       <div className="panel">
+        <h3>他/她是谁？</h3>
+        <p className="hint" style={{ marginBottom: 12 }}>
+          一张资料卡：他是谁、喜欢什么、你们之间约好了什么。只填有依据的事实，不确定就留空。
+        </p>
+
+        {otherLegacy ? (
+          <div className="prose-box" style={{ marginBottom: 10 }}>
+            <textarea
+              className="prose-input"
+              value={otherLegacy}
+              onChange={(e) => setOtherLegacy(e.target.value)}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="hint" style={{ margin: "10px 0 6px" }}>画像</div>
+            <div className="row" style={{ marginBottom: 6 }}>
+              <label className="field grow" style={{ marginBottom: 6 }}>
+                <span>名字 / 称呼</span>
+                <input className="input" value={other.profile.name}
+                  onChange={(e) => setOther({ ...other, profile: { ...other.profile, name: e.target.value } })} />
+              </label>
+              <label className="field" style={{ marginBottom: 6, width: 120 }}>
+                <span>年龄</span>
+                <input className="input" value={other.profile.age}
+                  onChange={(e) => setOther({ ...other, profile: { ...other.profile, age: e.target.value } })} />
+              </label>
+            </div>
+            <div className="row" style={{ marginBottom: 6 }}>
+              <label className="field grow" style={{ marginBottom: 6 }}>
+                <span>职业</span>
+                <input className="input" value={other.profile.occupation}
+                  onChange={(e) => setOther({ ...other, profile: { ...other.profile, occupation: e.target.value } })} />
+              </label>
+              <label className="field grow" style={{ marginBottom: 6 }}>
+                <span>所在地</span>
+                <input className="input" value={other.profile.location}
+                  onChange={(e) => setOther({ ...other, profile: { ...other.profile, location: e.target.value } })} />
+              </label>
+            </div>
+            <label className="field" style={{ marginBottom: 10 }}>
+              <span>家庭关系</span>
+              <input className="input" value={other.profile.family}
+                onChange={(e) => setOther({ ...other, profile: { ...other.profile, family: e.target.value } })} />
+            </label>
+
+            <div className="hint" style={{ margin: "10px 0 6px" }}>喜好</div>
+            <label className="field" style={{ marginBottom: 6 }}>
+              <span>爱吃 / 不吃</span>
+              <input className="input" value={other.likes.food}
+                onChange={(e) => setOther({ ...other, likes: { ...other.likes, food: e.target.value } })} />
+            </label>
+            <label className="field" style={{ marginBottom: 6 }}>
+              <span>讨厌的事</span>
+              <input className="input" value={other.likes.dislikes}
+                onChange={(e) => setOther({ ...other, likes: { ...other.likes, dislikes: e.target.value } })} />
+            </label>
+            <label className="field" style={{ marginBottom: 10 }}>
+              <span>习惯用的工具 / 做法</span>
+              <input className="input" value={other.likes.tools}
+                onChange={(e) => setOther({ ...other, likes: { ...other.likes, tools: e.target.value } })} />
+            </label>
+
+            <div className="hint" style={{ margin: "10px 0 6px" }}>约定（每行一条，写成「类别：内容」）</div>
+            <div className="prose-box">
+              <textarea
+                className="prose-input"
+                style={{ minHeight: 90 }}
+                placeholder={"称呼：他叫我小鱼\n规则：他说「当时明月在」，我只回「曾照彩云归」"}
+                value={other.pacts.join("\n")}
+                onChange={(e) => setOther({ ...other, pacts: e.target.value.split("\n").filter((x) => x.trim()) })}
+              />
+            </div>
+
+            <div className="hint" style={{ margin: "10px 0 6px" }}>过往经历（每行一条）</div>
+            <div className="prose-box">
+              <textarea
+                className="prose-input"
+                style={{ minHeight: 80 }}
+                placeholder={"2019 年到上海读书\n2025 年 9 月到济南"}
+                value={other.history.join("\n")}
+                onChange={(e) => setOther({ ...other, history: e.target.value.split("\n").filter((x) => x.trim()) })}
+              />
+            </div>
+
+            <div className="hint" style={{ margin: "10px 0 6px" }}>和我的经历（每行一条）</div>
+            <div className="prose-box">
+              <textarea
+                className="prose-input"
+                style={{ minHeight: 80 }}
+                placeholder={"一起把提示词改到第九版\n约好「当时明月在」对「曾照彩云归」"}
+                value={other.together.join("\n")}
+                onChange={(e) => setOther({ ...other, together: e.target.value.split("\n").filter((x) => x.trim()) })}
+              />
+            </div>
+
+            <label className="field" style={{ marginTop: 10, marginBottom: 4 }}>
+              <span>一句话概括</span>
+              <input className="input" value={other.summary}
+                onChange={(e) => setOther({ ...other, summary: e.target.value })} />
+            </label>
+          </>
+        )}
+
+        {treasures.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div className="hint" style={{ marginBottom: 6 }}>
+              可以提起的回忆（不是资料卡的一部分，聊天时只在自然相关时才提）
+            </div>
+            <div className="row" style={{ gap: 6 }}>
+              {treasures.slice(0, 8).map((x) => (
+                <span key={x.id} className="chip small">{x.title}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="row" style={{ marginTop: 14 }}>
+          <button className="btn ghost" onClick={genOther} disabled={otherBusy}>
+            {otherBusy ? "生成中…" : "重新生成资料卡"}
+          </button>
+          <button className="btn ghost" onClick={saveOtherText} disabled={otherBusy}>
+            保存资料卡
+          </button>
+          <button className="btn ghost" onClick={() => openHistory("other")}>
+            查看过往
+          </button>
+        </div>
+
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid var(--line)" }}>
+          <div className="hint" style={{ marginBottom: 6 }}>
+            提示词（每轮真正发给模型的那段，由资料卡生成，可单独改、单独重生成）
+          </div>
+          <div className="prose-box">
+            <textarea
+              className="prose-input"
+              style={{ minHeight: 110 }}
+              placeholder="还没有。点「生成提示词」会根据资料卡和回忆写一段。"
+              value={otherPrompt}
+              onChange={(e) => setOtherPrompt(e.target.value)}
+            />
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="btn ghost" onClick={genOtherPrompt} disabled={promptBusy}>
+              {promptBusy ? "生成中…" : "重新生成提示词"}
+            </button>
+            <button className="btn ghost" onClick={savePromptText} disabled={promptBusy}>
+              保存提示词
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
         <h3>说话方式</h3>
         {style?.style ? (
           <>
@@ -404,7 +677,7 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
         <div className="modal-mask" onClick={() => setHistoryKind(null)}>
           <div className="modal-card" style={{ width: "min(720px, 92vw)" }} onClick={(e) => e.stopPropagation()}>
             <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-              <h3>{historyKind === "self" ? "「我是谁」的过往版本" : "说话方式的过往版本"}</h3>
+              <h3>{historyKind === "self" ? "「我是谁」的过往版本" : historyKind === "other" ? "「他/她是谁」的过往版本" : "说话方式的过往版本"}</h3>
               <button className="icon-btn" onClick={() => setHistoryKind(null)}>✕</button>
             </div>
             {historyItems.length === 0 ? (

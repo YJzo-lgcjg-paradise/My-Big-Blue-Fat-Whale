@@ -1,4 +1,4 @@
-# My Big Blue Fat Whale 4.0 · 源码
+# My Big Blue Fat Whale 4.1 · 源码
 
 给 AI 对话装一套外置记忆。本目录是可构建的源代码，不含编译产物、运行数据与密钥。
 
@@ -116,3 +116,11 @@ dsh plugin --profile desktop add "link:<本目录>\dsh-plugin-memory-bridge"
 ## 许可
 
 个人项目，自用为主。
+
+## 分支约定
+
+- `main`：发布线，只放当前最新版本（现在是 4.1）
+- `v3`、`v4`、`v5`……：每个大版本一个长期分支，小版本（4.0、4.1）都在自己大版本的分支里往前走
+- 标签：`v3.0`、`v4.0`、`v4.1`，对应每个小版本的发布点
+
+要回到某个旧版本，`git switch v4` 再 `git checkout v4.0` 即可。

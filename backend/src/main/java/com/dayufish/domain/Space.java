@@ -43,6 +43,20 @@ public class Space {
     @Column(name = "persona_self", length = 4000)
     private String personaSelf = "";
 
+    /** 「他/她是谁」：第一人称写用户那个人 */
+    @Column(name = "persona_other", length = 4000)
+    private String personaOther = "";
+
+    /** 「他/她是谁」的提示词片段：由资料卡生成，可单独重写 */
+    @Column(name = "persona_other_prompt", length = 4000)
+    private String personaOtherPrompt = "";
+
+    @Column(name = "persona_other_prompt_at")
+    private Instant personaOtherPromptAt;
+
+    @Column(name = "persona_other_at")
+    private Instant personaOtherAt;
+
     @Column(name = "persona_self_at")
     private Instant personaSelfAt;
 
@@ -124,6 +138,38 @@ public class Space {
 
     public void setPersonaSelf(String personaSelf) {
         this.personaSelf = personaSelf;
+    }
+
+    public String getPersonaOther() {
+        return personaOther;
+    }
+
+    public void setPersonaOther(String personaOther) {
+        this.personaOther = personaOther;
+    }
+
+    public String getPersonaOtherPrompt() {
+        return personaOtherPrompt;
+    }
+
+    public void setPersonaOtherPrompt(String personaOtherPrompt) {
+        this.personaOtherPrompt = personaOtherPrompt;
+    }
+
+    public Instant getPersonaOtherPromptAt() {
+        return personaOtherPromptAt;
+    }
+
+    public void setPersonaOtherPromptAt(Instant personaOtherPromptAt) {
+        this.personaOtherPromptAt = personaOtherPromptAt;
+    }
+
+    public Instant getPersonaOtherAt() {
+        return personaOtherAt;
+    }
+
+    public void setPersonaOtherAt(Instant personaOtherAt) {
+        this.personaOtherAt = personaOtherAt;
     }
 
     public Instant getPersonaSelfAt() {

@@ -505,6 +505,34 @@ public class ApiController {
         return Map.of("items", out);
     }
 
+    @GetMapping("/spaces/{id}/persona/other")
+    public Map<String, Object> getOther(@PathVariable Long id) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("text", styles.otherText(id));
+        m.put("prompt", styles.otherPromptText(id));
+        return m;
+    }
+
+    @PostMapping("/spaces/{id}/persona/other")
+    public Map<String, Object> generateOther(@PathVariable Long id) {
+        return Map.of("text", styles.generateOther(id));
+    }
+
+    @PostMapping("/spaces/{id}/persona/other/save")
+    public Map<String, Object> saveOther(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        return Map.of("text", styles.saveOther(id, str(body.get("text"))));
+    }
+
+    @PostMapping("/spaces/{id}/persona/other/prompt")
+    public Map<String, Object> generateOtherPrompt(@PathVariable Long id) {
+        return Map.of("prompt", styles.generateOtherPrompt(id));
+    }
+
+    @PostMapping("/spaces/{id}/persona/other/prompt/save")
+    public Map<String, Object> saveOtherPrompt(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        return Map.of("prompt", styles.saveOtherPrompt(id, str(body.get("prompt"))));
+    }
+
     @GetMapping("/spaces/{id}/persona/self")
     public Map<String, Object> getSelf(@PathVariable Long id) {
         var s = styles.get(id);

@@ -634,6 +634,11 @@ public class MemoryService {
             sb.append("【我是谁】\n").append(self).append("\n\n");
             usedChars += self.length();
         }
+        String other = styles.otherBlock(spaceId);
+        if (other != null && !other.isBlank()) {
+            sb.append("【他是谁】\n").append(other.trim()).append("\n\n");
+            usedChars += other.length();
+        }
         String style = styles.block(spaceId);
         if (style != null && !style.isBlank()) {
             sb.append(style.trim()).append("\n\n");

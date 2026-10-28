@@ -634,6 +634,10 @@ public class EpisodeService {
         if (!selfText.isBlank()) {
             sb.append("【我是谁】\n").append(selfText.trim()).append("\n\n");
         }
+        String otherText = otherBlockOf(spaceId);
+        if (!otherText.isBlank()) {
+            sb.append("【他是谁】\n").append(otherText.trim()).append("\n\n");
+        }
         sb.append("【你们最近在做什么】\n");
         List<String> threads = new ArrayList<>();
         Episode last = null;
@@ -829,6 +833,71 @@ public class EpisodeService {
     /* ---------------- 工具 ---------------- */
 
     /** 取该记忆体「最近 N 条已完成对话」作为上下文，避免每次从零理解。 */
+    /** 「他/她是谁」：结构化 JSON 渲染成提示词片段；老格式直接返回原文 */
+    private String otherBlockOf(Long spaceId) {
+        try {
+            var sp = spaces.findById(spaceId).orElse(null);
+            if (sp == null) {
+                return "";
+            }
+            // 优先用单独生成/编辑过的提示词
+            String prompt = sp.getPersonaOtherPrompt();
+            if (prompt != null && !prompt.isBlank()) {
+                return prompt.trim();
+            }
+            if (sp.getPersonaOther() == null || sp.getPersonaOther().isBlank()) {
+                return "";
+            }
+            String raw = sp.getPersonaOther().trim();
+            if (!raw.startsWith("{")) {
+                return raw;
+            }
+            var node = mapper.readTree(raw);
+            StringBuilder sb = new StringBuilder();
+            var pr = node.path("profile");
+            List<String> facts = new ArrayList<>();
+            addFact(facts, "称呼", pr.path("name").asText(""));
+            addFact(facts, "年龄", pr.path("age").asText(""));
+            addFact(facts, "职业", pr.path("occupation").asText(""));
+            addFact(facts, "所在地", pr.path("location").asText(""));
+            addFact(facts, "家人", pr.path("family").asText(""));
+            if (!facts.isEmpty()) {
+                sb.append("画像｜").append(String.join("；", facts)).append('\n');
+            }
+            var lk = node.path("likes");
+            List<String> likes = new ArrayList<>();
+            addFact(likes, "爱吃", lk.path("food").asText(""));
+            addFact(likes, "讨厌", lk.path("dislikes").asText(""));
+            addFact(likes, "习惯", lk.path("tools").asText(""));
+            if (!likes.isEmpty()) {
+                sb.append("喜好｜").append(String.join("；", likes)).append('\n');
+            }
+            List<String> pacts = new ArrayList<>();
+            for (var p : node.path("pacts")) {
+                String s = p.asText("").trim();
+                if (!s.isEmpty()) {
+                    pacts.add(s);
+                }
+            }
+            if (!pacts.isEmpty()) {
+                sb.append("约定｜").append(String.join("；", pacts)).append('\n');
+            }
+            String summary = node.path("summary").asText("").trim();
+            if (!summary.isEmpty()) {
+                sb.append("一句话：").append(summary).append('\n');
+            }
+            return sb.toString().trim();
+        } catch (Exception ex) {
+            return "";
+        }
+    }
+
+    private static void addFact(List<String> list, String label, String value) {
+        if (value != null && !value.isBlank()) {
+            list.add(label + "：" + value.trim());
+        }
+    }
+
     private String recentContext(Long spaceId, java.time.Instant before) {
         if (recentTurns <= 0) {
             return "";
