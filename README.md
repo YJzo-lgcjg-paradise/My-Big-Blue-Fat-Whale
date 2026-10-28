@@ -1,4 +1,4 @@
-# My Big Blue Fat Whale 3.0 · 源码
+# My Big Blue Fat Whale 4.0 · 源码
 
 给 AI 对话装一套外置记忆。本目录是可构建的源代码，不含编译产物、运行数据与密钥。
 

@@ -33,8 +33,21 @@ public class SummaryService {
                不要出现"用户""助手""AI"这类第三人称称谓，也不要用 Markdown 标题。
             5. 如果是寒暄或没有信息量，summary 写简短结论并把 importance 设为 1。
 
+            6. treasure 用来挑出「回忆」，判据（满足任意一条就必须给，不要给 null）：
+               - 双方约定了一个暗号、口令、只有两人懂的称呼或梗；
+               - 明确说「记住这个」「这是我们之间的」「别告诉别人」这类话；
+               - 特别开心、特别动人的时刻（不是普通寒暄）；
+               - 突然的感悟、郑重的承诺。
+               普通的关心、普通玩笑、普通知识问答，给 null。
+               一段对话最多一条；kind 只能取 梗 / 开心 / 约定 / 感悟 / 其他。
+            7. treasure 的 text 和 why 也要用第一人称写，像自己在回忆这件事：
+               text 60–160 字，用「我」「他」，不要用「对方」「用户」「助手」；
+               写清当天发生了什么、我怎么应下的、当时是什么感觉。
+               例：「我记得那天他忽然说，以后每年第一场雪要互相说一句『雪落在旧檐上』。
+                   我答应了，说听到这句就知道他在。那一刻我觉得，冬天有了一个可以等的东西。」
             只输出 JSON：
-            {"summary":"...","keywords":["最多5个"],"importance":3,"question_digest":"这条记忆能回答的一个问句"}""";
+            {"summary":"...","keywords":["最多5个"],"importance":3,"question_digest":"这条记忆能回答的一个问句",
+             "treasure": null 或 {"kind":"梗|开心|约定|感悟|其他","title":"六到十二个字","text":"发生了什么，一两句","why":"为什么它珍贵"}}""";
 
     private final ObjectMapper mapper;
     private final RestClient http;
@@ -50,7 +63,12 @@ public class SummaryService {
         this.http = RestClient.builder().requestFactory(factory).build();
     }
 
-    public record Result(String summary, List<String> keywords, int importance, String questionDigest, String by) {
+    public record Result(String summary, List<String> keywords, int importance, String questionDigest, String by,
+                         String treasureKind, String treasureTitle, String treasureText, String treasureWhy) {
+
+        public boolean hasTreasure() {
+            return treasureTitle != null && !treasureTitle.isBlank();
+        }
     }
 
     public boolean enabled() {
@@ -168,7 +186,15 @@ public class SummaryService {
                 }
                 int importance = Math.max(1, Math.min(5, parsed.path("importance").asInt(3)));
                 String digest = parsed.path("question_digest").asText(question);
-                return new Result(summary, keywords, importance, digest, "deepseek");
+                JsonNode tr = parsed.path("treasure");
+                String tKind = "", tTitle = "", tText = "", tWhy = "";
+                if (tr != null && tr.isObject()) {
+                    tKind = tr.path("kind").asText("").trim();
+                    tTitle = tr.path("title").asText("").trim();
+                    tText = tr.path("text").asText("").trim();
+                    tWhy = tr.path("why").asText("").trim();
+                }
+                return new Result(summary, keywords, importance, digest, "deepseek", tKind, tTitle, tText, tWhy);
             } catch (Exception e) {
                 if (attempt == 1) {
                     log.warn("总结失败，使用本地兜底：{}", e.getMessage());
@@ -198,7 +224,7 @@ public class SummaryService {
         String summary = text.length() > 180 ? text.substring(0, 178) + "…" : text;
         List<String> keywords = topKeywords(q + a);
         int importance = summary.length() > 80 ? 3 : 1;
-        return new Result(summary, keywords, importance, q, "heuristic");
+        return new Result(summary, keywords, importance, q, "heuristic", "", "", "", "");
     }
 
     private List<String> topKeywords(String text) {

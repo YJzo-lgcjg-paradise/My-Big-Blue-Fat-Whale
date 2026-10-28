@@ -12,6 +12,8 @@ import com.dayufish.service.EmbeddingService;
 import com.dayufish.service.ImportParser;
 import com.dayufish.service.MemoryService;
 import com.dayufish.service.SummaryService;
+import com.dayufish.repo.TreasureRepository;
+import com.dayufish.domain.Treasure;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -46,11 +48,13 @@ public class ApiController {
     private final StyleService styles;
     private final EpisodeService episodes;
     private final MediaService media;
+    private final TreasureRepository treasures;
     private final QwenOcrService ocr;
 
     public ApiController(MemoryService memory, SummaryService summaries, EmbeddingService embeddings,
             DshService dsh, ChatService chat, DeepSeekWebService deepseek, LlmSettings llm,
-            StyleService styles, EpisodeService episodes, MediaService media, QwenOcrService ocr) {
+            StyleService styles, EpisodeService episodes, MediaService media, QwenOcrService ocr,
+            TreasureRepository treasures) {
         this.memory = memory;
         this.summaries = summaries;
         this.embeddings = embeddings;
@@ -61,6 +65,7 @@ public class ApiController {
         this.styles = styles;
         this.episodes = episodes;
         this.media = media;
+        this.treasures = treasures;
         this.ocr = ocr;
     }
 
@@ -348,6 +353,56 @@ public class ApiController {
         return m;
     }
 
+    @GetMapping("/spaces/{id}/context-mode")
+    public Map<String, Object> getContextMode(@PathVariable Long id) {
+        var s = memory.spaceOf(id);
+        return Map.of("mode", s.getContextMode());
+    }
+
+    @PostMapping("/spaces/{id}/context-mode")
+    public Map<String, Object> setContextMode(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        String mode = str(body.get("mode")).isBlank() ? "budget" : str(body.get("mode"));
+        memory.setContextMode(id, mode);
+        return Map.of("mode", mode);
+    }
+
+    /* ---------------- 回忆 ---------------- */
+
+    @GetMapping("/spaces/{id}/treasures")
+    public Map<String, Object> treasures(@PathVariable Long id) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Treasure t : treasures.findBySpaceIdOrderByIdDesc(id)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", t.getId());
+            m.put("kind", t.getKind());
+            m.put("title", t.getTitle());
+            m.put("text", t.getText());
+            m.put("why", t.getWhy());
+            m.put("memoryId", t.getMemoryId());
+            m.put("createdAt", String.valueOf(t.getCreatedAt()));
+            out.add(m);
+        }
+        return Map.of("items", out);
+    }
+
+    @DeleteMapping("/treasures/{id}")
+    public Map<String, Object> deleteTreasure(@PathVariable Long id) {
+        treasures.deleteById(id);
+        return Map.of("ok", true);
+    }
+
+    @PostMapping("/spaces/{id}/treasures")
+    public Map<String, Object> addTreasure(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Treasure t = new Treasure();
+        t.setSpaceId(id);
+        t.setKind(str(body.get("kind")).isBlank() ? "其他" : str(body.get("kind")));
+        t.setTitle(str(body.get("title")));
+        t.setText(str(body.get("text")));
+        t.setWhy(str(body.get("why")));
+        t = treasures.save(t);
+        return Map.of("id", t.getId());
+    }
+
     /* ---------------- 事件记忆 ---------------- */
 
     @GetMapping("/spaces/{id}/episodes")
@@ -434,6 +489,53 @@ public class ApiController {
     @PostMapping("/spaces/{id}/restyle")
     public Map<String, Object> restyle(@PathVariable Long id) {
         return Map.of("queued", memory.restyle(id));
+    }
+
+    @GetMapping("/spaces/{id}/history")
+    public Map<String, Object> history(@PathVariable Long id,
+            @RequestParam(defaultValue = "self") String kind) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (var h : styles.historyOf(id, kind)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", h.getId());
+            m.put("text", h.getText());
+            m.put("createdAt", String.valueOf(h.getCreatedAt()));
+            out.add(m);
+        }
+        return Map.of("items", out);
+    }
+
+    @GetMapping("/spaces/{id}/persona/self")
+    public Map<String, Object> getSelf(@PathVariable Long id) {
+        var s = styles.get(id);
+        return Map.of("text", styles.selfText(id));
+    }
+
+    @PostMapping("/spaces/{id}/persona/self")
+    public Map<String, Object> generateSelf(@PathVariable Long id) {
+        var s = styles.generateSelf(id);
+        return Map.of("text", s.text(), "basis", s.basis(), "at", String.valueOf(s.updatedAt()));
+    }
+
+    @PostMapping("/spaces/{id}/persona/self/save")
+    public Map<String, Object> saveSelf(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        var s = styles.saveSelf(id, str(body.get("text")));
+        return Map.of("text", s.text());
+    }
+
+    @GetMapping("/spaces/{id}/style/candidates")
+    public Map<String, Object> styleCandidates(@PathVariable Long id,
+            @RequestParam(defaultValue = "") String q,
+            @RequestParam(defaultValue = "30") int limit) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (var p : styles.candidates(id, q, limit)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", p.id());
+            m.put("question", p.question());
+            m.put("answer", p.answer());
+            out.add(m);
+        }
+        return Map.of("items", out, "total", out.size());
     }
 
     @PostMapping("/spaces/{id}/style/picks")
@@ -600,7 +702,7 @@ public class ApiController {
             }
             searchQuery = summaries.expandQuery(lastUser, recent);
         }
-        MemoryService.Block memBlock = spaceId > 0 ? memory.memoryBlock(spaceId, searchQuery) : new MemoryService.Block("", List.of());
+        MemoryService.Block memBlock = spaceId > 0 ? memory.chatContext(spaceId, searchQuery) : new MemoryService.Block("", List.of());
         String block = memBlock.text();
         String styleBlock = spaceId > 0 ? styles.block(spaceId) : "";
         ChatService.Reply reply = chat.chat(block, styleBlock, history);

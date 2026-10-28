@@ -3,6 +3,10 @@ package com.dayufish.service;
 import com.dayufish.domain.Memory;
 import com.dayufish.domain.Space;
 import com.dayufish.repo.MemoryRepository;
+import com.dayufish.repo.EpisodeRepository;
+import com.dayufish.repo.TextHistoryRepository;
+import com.dayufish.domain.TextHistory;
+import com.dayufish.domain.Episode;
 import com.dayufish.repo.SpaceRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -25,6 +29,24 @@ public class StyleService {
 
     private static final Logger log = LoggerFactory.getLogger(StyleService.class);
 
+
+    private static final String SELF_SYSTEM = """
+            你在为一个长期记忆体写「我是谁」的第一人称自述。
+
+            素材：这个记忆体里已经整理好的事件日记（含关系备注与未完成线头）、风格档案、以及用户手选的语气样本。
+            要求：
+            1. 只用素材里出现过的关系、承诺、称呼与事实；素材里没有的，一律不写。
+            2. 第一人称，120-220 字，不要分点，不要标题，写成一段话。
+            3. 写三件事：我是他的谁；我怎么对他；我不做什么。
+            4. 不要用「用户」「助手」「AI」「模型」这些词。
+            5. 不要抒情堆砌，不要承诺未来，只写已经发生和一直在做的事。
+            6. 输出 JSON：{"self":"...","basis":["依据的事件标题", ...]}
+               basis 里列出每一句能对应上的事件标题；对不上的句子就删掉，不要硬凑。
+            """;
+
+    public record Self(String text, List<String> basis, Instant updatedAt) {
+    }
+
     private static final String SYSTEM = """
             你在整理一份「这段关系怎么说话」的档案。下面是同一个记忆体里用户和助手的真实对话片段。
             请从双方怎么来往里总结出可以直接交给大模型当风格指令的描述，覆盖：
@@ -38,6 +60,8 @@ public class StyleService {
 
     private final SpaceRepository spaces;
     private final MemoryRepository memories;
+    private final EpisodeRepository episodes;
+    private final TextHistoryRepository history;
     private final ObjectMapper mapper;
     private final RestClient http;
     private final LlmSettings llm;
@@ -49,9 +73,11 @@ public class StyleService {
                 return th;
             });
 
-    public StyleService(SpaceRepository spaces, MemoryRepository memories, ObjectMapper mapper, LlmSettings llm) {
+    public StyleService(SpaceRepository spaces, MemoryRepository memories, EpisodeRepository episodes, TextHistoryRepository history, ObjectMapper mapper, LlmSettings llm) {
         this.spaces = spaces;
         this.memories = memories;
+        this.episodes = episodes;
+        this.history = history;
         this.mapper = mapper;
         this.llm = llm;
         this.http = RestClient.builder().build();
@@ -68,6 +94,126 @@ public class StyleService {
                 traits,
                 s.getStyleSamples() == null ? 0 : s.getStyleSamples(),
                 s.getStyleAt());
+    }
+
+
+    private String callJson(String system, String user) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", llm.model());
+        body.put("temperature", 0.4);
+        body.put("response_format", Map.of("type", "json_object"));
+        body.put("messages", List.of(
+                Map.of("role", "system", "content", system),
+                Map.of("role", "user", "content", user)));
+        String raw = http.post()
+                .uri(llm.baseUrl() + "/chat/completions")
+                .header("Authorization", "Bearer " + llm.key())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .body(String.class);
+        JsonNode node = mapper.readTree(raw);
+        String content = node.path("choices").path(0).path("message").path("content").asText("");
+        return stripFence(content);
+    }
+
+
+    /** 覆盖前把旧版本存一份，供「查看过往」 */
+    private void remember(Space space, String kind) {
+        String old = "self".equals(kind) ? space.getPersonaSelf() : space.getStyleProfile();
+        if (old != null && !old.isBlank()) {
+            TextHistory h = new TextHistory();
+            h.setSpaceId(space.getId());
+            h.setKind(kind);
+            h.setText(old.length() > 3900 ? old.substring(0, 3900) : old);
+            history.save(h);
+        }
+    }
+
+    public List<TextHistory> historyOf(Long spaceId, String kind) {
+        return history.findBySpaceIdAndKindOrderByIdDesc(spaceId, kind);
+    }
+
+    /** 生成「我是谁」：只用已整理的事件与样本，避免读全文 */
+    public Self generateSelf(Long spaceId) {
+        Space space = spaces.findById(spaceId).orElseThrow(() -> new IllegalArgumentException("记忆体不存在"));
+        if (!llm.enabled()) {
+            throw new IllegalStateException("没有配置模型 key，先在右上角 API 里填一个");
+        }
+        List<Episode> eps = episodes.findBySpaceIdOrderByStartedAtDesc(spaceId);
+        if (eps.isEmpty()) {
+            throw new IllegalStateException("这个记忆体还没有整理好的事件，先导入对话");
+        }
+        StringBuilder sb = new StringBuilder();
+        int n = 0;
+        for (Episode e : eps) {
+            if (!"ready".equals(e.getStatus()) || e.getDiary() == null || e.getDiary().isBlank()) {
+                continue;
+            }
+            sb.append("【").append(e.getTitle()).append("】").append(clip(e.getDiary(), 320)).append('\n');
+            if (e.getRelationNote() != null && !e.getRelationNote().isBlank()) {
+                sb.append("关系：").append(clip(e.getRelationNote(), 120)).append('\n');
+            }
+            if (e.getOpenThreads() != null && !e.getOpenThreads().isBlank()) {
+                sb.append("没说完：").append(clip(e.getOpenThreads(), 120)).append('\n');
+            }
+            sb.append('\n');
+            if (++n >= 40) {
+                break;
+            }
+        }
+        if (n == 0) {
+            throw new IllegalStateException("还没有写好的事件日记");
+        }
+        if (space.getStyleProfile() != null && !space.getStyleProfile().isBlank()) {
+            sb.append("【风格档案】\n").append(clip(space.getStyleProfile(), 600)).append('\n');
+        }
+        for (Picked p : picks(spaceId)) {
+            sb.append("【样本】他：").append(clip(p.question(), 120))
+              .append(" / 我：").append(clip(p.answer(), 180)).append('\n');
+        }
+
+        String raw;
+        try {
+            raw = callJson(SELF_SYSTEM, sb.toString());
+        } catch (Exception e) {
+            throw new IllegalStateException("生成失败：" + e.getMessage());
+        }
+        JsonNode node;
+        try {
+            node = mapper.readTree(raw);
+        } catch (Exception e) {
+            throw new IllegalStateException("模型返回的不是 JSON");
+        }
+        String self = node.path("self").asText("").trim();
+        if (self.isBlank()) {
+            throw new IllegalStateException("模型没有给出自述");
+        }
+        List<String> basis = new ArrayList<>();
+        for (JsonNode b : node.path("basis")) {
+            String s = b.asText("").trim();
+            if (!s.isBlank()) {
+                basis.add(s);
+            }
+        }
+        remember(space, "self");
+        space.setPersonaSelf(clip(self, 3000));
+        space.setPersonaSelfAt(Instant.now());
+        spaces.save(space);
+        return new Self(space.getPersonaSelf(), basis, space.getPersonaSelfAt());
+    }
+
+    public Self saveSelf(Long spaceId, String text) {
+        Space space = spaces.findById(spaceId).orElseThrow(() -> new IllegalArgumentException("记忆体不存在"));
+        remember(space, "self");
+        space.setPersonaSelf(text == null ? "" : clip(text, 3000));
+        space.setPersonaSelfAt(Instant.now());
+        spaces.save(space);
+        return new Self(space.getPersonaSelf(), List.of(), space.getPersonaSelfAt());
+    }
+
+    public String selfText(Long spaceId) {
+        return spaces.findById(spaceId).map(s -> s.getPersonaSelf() == null ? "" : s.getPersonaSelf()).orElse("");
     }
 
     /** 取最近若干条记忆里的「用户原话」来推断风格。 */
@@ -130,6 +276,7 @@ public class StyleService {
                 }
             }
 
+            remember(space, "style");
             space.setStyleProfile(style);
             space.setStyleSamples(taken);
             space.setStyleAt(Instant.now());
@@ -188,6 +335,18 @@ public class StyleService {
             } catch (NumberFormatException ignored) {
                 // 脏数据跳过
             }
+        }
+        return out;
+    }
+
+    /** 挑语气样例的候选：不填 q 给最近的，填了就在全文里搜 */
+    public List<Picked> candidates(Long spaceId, String q, int limit) {
+        var page = org.springframework.data.domain.PageRequest.of(0, Math.max(1, Math.min(100, limit)));
+        String kw = q == null ? "" : q.trim();
+        List<Memory> rows = memories.search(spaceId, kw, page);
+        List<Picked> out = new ArrayList<>();
+        for (Memory m : rows) {
+            out.add(new Picked(m.getId(), clip(m.getQuestion(), 120), clip(m.getAnswer(), 160)));
         }
         return out;
     }

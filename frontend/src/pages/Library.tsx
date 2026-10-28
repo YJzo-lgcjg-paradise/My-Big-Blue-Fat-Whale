@@ -8,10 +8,56 @@ type Props = {
   onOpen: (m: Memory) => void;
 };
 
-const PAGE = 30;
+function Pager({
+  page,
+  pageSize,
+  total,
+  onChange,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  onChange: (p: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const nums: number[] = [];
+  const from = Math.max(0, Math.min(page - 2, pages - 5));
+  for (let i = from; i < Math.min(pages, from + 5); i++) nums.push(i);
+  return (
+    <div className="pager">
+      <button className="btn ghost sm" disabled={page === 0} onClick={() => onChange(page - 1)}>
+        上一页
+      </button>
+      {from > 0 && <span className="hint">…</span>}
+      {nums.map((n) => (
+        <button
+          key={n}
+          className={"page-num" + (n === page ? " on" : "")}
+          onClick={() => onChange(n)}
+        >
+          {n + 1}
+        </button>
+      ))}
+      {from + 5 < pages && <span className="hint">…</span>}
+      <button className="btn ghost sm" disabled={page >= pages - 1} onClick={() => onChange(page + 1)}>
+        下一页
+      </button>
+      <span className="hint" style={{ marginLeft: 6 }}>
+        第 {page + 1} / {pages} 页 · 共 {total}
+      </span>
+    </div>
+  );
+}
+
+const EP_PAGE = 20;
+const TURN_PAGE = 20;
+const TR_PAGE = 12;
 
 export function Library({ spaceId, refreshKey, onOpen }: Props) {
-  const [layer, setLayer] = useState<"episodes" | "turns">("episodes");
+  const [layer, setLayer] = useState<"episodes" | "turns" | "treasures">("episodes");
+  const [treasures, setTreasures] = useState<
+    { id: number; kind: string; title: string; text: string; why: string; createdAt: string }[]
+  >([]);
   const [q, setQ] = useState("");
   const [deep, setDeep] = useState(false);
   const [items, setItems] = useState<Memory[]>([]);
@@ -42,14 +88,18 @@ export function Library({ spaceId, refreshKey, onOpen }: Props) {
     }[];
   } | null>(null);
   const [merging, setMerging] = useState<number[]>([]);
+  const [epPage, setEpPage] = useState(0);
+  const [turnPage, setTurnPage] = useState(0);
+  const [trPage, setTrPage] = useState(0);
 
-  const loadEpisodes = useCallback(async () => {
+  const loadEpisodes = useCallback(async (page = 0) => {
     setLoading(true);
     setError("");
     try {
-      const res = await api.episodes(spaceId, PAGE, 0);
+      const res = await api.episodes(spaceId, EP_PAGE, page * EP_PAGE);
       setEpisodes(res.items);
       setEpTotal(res.total);
+      api.treasures(spaceId).then((r) => setTreasures(r.items)).catch(() => {});
       setEpProgress({
         total: res.total,
         ready: res.ready,
@@ -75,7 +125,7 @@ export function Library({ spaceId, refreshKey, onOpen }: Props) {
           setTotal(res.items.length);
           setMode("recall");
         } else {
-          const res = await api.memories(spaceId, "", PAGE, 0);
+          const res = await api.memories(spaceId, "", TURN_PAGE, turnPage * TURN_PAGE);
           setItems(res.items);
           setTotal(res.total);
           setMode("list");
@@ -86,50 +136,25 @@ export function Library({ spaceId, refreshKey, onOpen }: Props) {
         setLoading(false);
       }
     },
-    [spaceId]
+    [spaceId, turnPage]
   );
-
-  const loadMore = useCallback(async () => {
-    if (mode !== "list" || loadingMore || loading || items.length >= total) return;
-    setLoadingMore(true);
-    try {
-      const res = await api.memories(spaceId, "", PAGE, items.length);
-      setItems((prev) => [...prev, ...res.items]);
-      setTotal(res.total);
-    } catch (e: any) {
-      setError(e.message || "加载失败");
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [mode, loadingMore, loading, items.length, total, spaceId]);
 
   useEffect(() => {
     setQ("");
     setMerging([]);
-    loadEpisodes();
+    setEpPage(0);
+    setTurnPage(0);
+    setTrPage(0);
+    loadEpisodes(0);
     load("", false);
   }, [spaceId, refreshKey, load, loadEpisodes]);
 
   useEffect(() => {
     if (layer !== "episodes") return;
     if (!epProgress.partitioning && epProgress.pending === 0) return;
-    const t = window.setInterval(() => loadEpisodes(), 3000);
+    const t = window.setInterval(() => loadEpisodes(epPage), 3000);
     return () => window.clearInterval(t);
-  }, [layer, epProgress.partitioning, epProgress.pending, loadEpisodes]);
-
-  async function loadMoreEpisodes() {
-    if (epLoadingMore || episodes.length >= epTotal) return;
-    setEpLoadingMore(true);
-    try {
-      const res = await api.episodes(spaceId, PAGE, episodes.length);
-      setEpisodes((prev) => [...prev, ...res.items]);
-      setEpTotal(res.total);
-    } catch (e: any) {
-      setError(e.message || "加载失败");
-    } finally {
-      setEpLoadingMore(false);
-    }
-  }
+  }, [layer, epProgress.partitioning, epProgress.pending, loadEpisodes, epPage]);
 
   async function openEpisode(ep: Episode) {
     try {
@@ -161,6 +186,9 @@ export function Library({ spaceId, refreshKey, onOpen }: Props) {
         </button>
         <button className={"chip" + (layer === "turns" ? " on" : "")} onClick={() => setLayer("turns")}>
           对话记忆 · {total}
+        </button>
+        <button className={"chip" + (layer === "treasures" ? " on" : "")} onClick={() => setLayer("treasures")}>
+          回忆 · {treasures.length}
         </button>
         {layer === "episodes" && (
           <span className="hint" style={{ marginLeft: "auto" }}>
@@ -260,12 +288,56 @@ export function Library({ spaceId, refreshKey, onOpen }: Props) {
             ))}
           </div>
 
-          {episodes.length < epTotal && (
-            <div style={{ display: "flex", justifyContent: "center", padding: "16px 0 4px" }}>
-              <button className="btn ghost" onClick={loadMoreEpisodes} disabled={epLoadingMore}>
-                {epLoadingMore ? "加载中…" : `再加载 ${PAGE} 个事件（还剩 ${epTotal - episodes.length} 个）`}
-              </button>
+          {epTotal > EP_PAGE && (
+            <Pager
+              page={epPage}
+              pageSize={EP_PAGE}
+              total={epTotal}
+              onChange={(p) => {
+                setEpPage(p);
+                loadEpisodes(p);
+              }}
+            />
+          )}
+        </>
+      )}
+
+      {layer === "treasures" && (
+        <>
+          {treasures.length === 0 ? (
+            <div className="empty">
+              <b>还没有回忆</b>
+              <p>只有你们才懂的梗、特别开心的时刻、郑重的约定、突然的感悟，会单独收进这里。</p>
             </div>
+          ) : (
+            <div className="tr-list">
+              {treasures.slice(trPage * TR_PAGE, trPage * TR_PAGE + TR_PAGE).map((x) => (
+                <div key={x.id} className="tr-card">
+                  <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <div>
+                      <span className="tr-kind">{x.kind}</span>
+                      <span className="tr-title">{x.title}</span>
+                    </div>
+                    <button
+                      className="icon-btn"
+                      title="删掉这条"
+                      onClick={async () => {
+                        if (!confirm(`删掉「${x.title}」？`)) return;
+                        await api.deleteTreasure(x.id);
+                        setTreasures((prev) => prev.filter((y) => y.id !== x.id));
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  {x.text && <p className="tr-text">{x.text}</p>}
+                  {x.why && <p className="hint" style={{ marginTop: 6 }}>为什么珍贵：{x.why}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+          {treasures.length > TR_PAGE && (
+            <Pager page={trPage} pageSize={TR_PAGE} total={treasures.length} onChange={setTrPage} />
           )}
         </>
       )}
@@ -327,12 +399,16 @@ export function Library({ spaceId, refreshKey, onOpen }: Props) {
             </div>
           )}
 
-          {mode === "list" && items.length < total && (
-            <div style={{ display: "flex", justifyContent: "center", padding: "18px 0 4px" }}>
-              <button className="btn ghost" onClick={loadMore} disabled={loadingMore}>
-                {loadingMore ? "加载中…" : `再加载 ${PAGE} 条（还剩 ${total - items.length} 条）`}
-              </button>
-            </div>
+          {mode === "list" && total > TURN_PAGE && (
+            <Pager
+              page={turnPage}
+              pageSize={TURN_PAGE}
+              total={total}
+              onChange={(p) => {
+                setTurnPage(p);
+                load("", false);
+              }}
+            />
           )}
         </>
       )}

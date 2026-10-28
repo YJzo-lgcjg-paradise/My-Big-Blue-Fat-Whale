@@ -232,7 +232,7 @@ export default function App() {
           }}
         />
       )}
-      <MusicButton />
+      <MusicButton src={entered ? "/autumn/app-theme.mp3" : "/autumn/intro-theme.mp3"} />
       <div className="app">
       <header className="topbar">
         <div className="brand">

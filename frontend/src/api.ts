@@ -176,6 +176,28 @@ export const api = {
       `/api/spaces/${spaceId}/style`,
       { method: "POST" }
     ),
+  history: (spaceId: number, kind: "self" | "style") =>
+    req<{ items: { id: number; text: string; createdAt: string }[] }>(
+      `/api/spaces/${spaceId}/history?kind=${kind}`
+    ),
+  styleCandidates: (spaceId: number, q: string, limit = 30) =>
+    req<{ items: { id: number; question: string; answer: string }[] }>(
+      `/api/spaces/${spaceId}/style/candidates?q=${encodeURIComponent(q)}&limit=${limit}`
+    ),
+  getContextMode: (spaceId: number) => req<{ mode: string }>(`/api/spaces/${spaceId}/context-mode`),
+  setContextMode: (spaceId: number, mode: string) =>
+    req<{ mode: string }>(`/api/spaces/${spaceId}/context-mode`, {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+  getSelf: (spaceId: number) => req<{ text: string }>(`/api/spaces/${spaceId}/persona/self`),
+  generateSelf: (spaceId: number) =>
+    req<{ text: string; basis: string[] }>(`/api/spaces/${spaceId}/persona/self`, { method: "POST" }),
+  saveSelf: (spaceId: number, text: string) =>
+    req<{ text: string }>(`/api/spaces/${spaceId}/persona/self/save`, {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
   restyle: (spaceId: number) =>
     req<{ queued: number }>(`/api/spaces/${spaceId}/restyle`, { method: "POST" }),
   setStylePicks: (spaceId: number, ids: number[]) =>
@@ -189,6 +211,11 @@ export const api = {
       body: JSON.stringify({ fromId, toId }),
     }),
 
+  treasures: (spaceId: number) =>
+    req<{ items: { id: number; kind: string; title: string; text: string; why: string; createdAt: string }[] }>(
+      `/api/spaces/${spaceId}/treasures`
+    ),
+  deleteTreasure: (id: number) => req<{ ok: boolean }>(`/api/treasures/${id}`, { method: "DELETE" }),
   episodes: (spaceId: number, limit = 20, offset = 0) =>
     req<{
       items: Episode[];

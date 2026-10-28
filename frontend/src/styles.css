@@ -1139,7 +1139,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 }
 .music-fab:hover { border-color: var(--gold); transform: scale(1.04); }
 .music-fab.off { color: var(--muted); border-color: rgba(255, 255, 255, 0.12); }
-.music-fab svg { display: block; }
+.music-fab svg { display: block; animation: none !important; transform: none !important; }
+.music-fab, .music-fab * { animation: none !important; }
 
 /* 风格样例挑选 */
 .pick-list {
@@ -1218,3 +1219,84 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
   display: block;
 }
 .ep-att .hint { font-size: 11px; line-height: 1.4; }
+
+/* ---------------- 珍贵记忆 ---------------- */
+.tr-list { display: flex; flex-direction: column; gap: 10px; }
+.tr-card {
+  border: 1px solid rgba(198, 167, 106, 0.28);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: linear-gradient(180deg, rgba(198, 167, 106, 0.06), rgba(198, 167, 106, 0.02));
+}
+.tr-kind {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--gold);
+  border: 1px solid rgba(198, 167, 106, 0.4);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-right: 8px;
+  vertical-align: 2px;
+}
+.tr-title { font-family: var(--font-serif); font-size: 15px; color: var(--text); }
+.tr-text { margin: 8px 0 0; color: #ddd8cc; font-size: 13px; line-height: 1.8; font-family: var(--font-serif); }
+
+/* ---------------- 人格文本：统一的框 ---------------- */
+.prose-box {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 14px 16px;
+}
+.prose-text {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.85;
+  font-family: var(--font-serif);
+  white-space: pre-wrap;
+}
+.prose-input {
+  width: 100%;
+  min-height: 120px;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.85;
+  font-family: var(--font-serif);
+}
+.prose-input::placeholder { color: #6f6a62; }
+.hist-item {
+  border-left: 2px solid rgba(198, 167, 106, 0.3);
+  padding: 8px 0 8px 12px;
+  margin-bottom: 12px;
+}
+
+/* ---------------- 分页 ---------------- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px 0 6px;
+  flex-wrap: wrap;
+}
+.page-num {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12.5px;
+  font-family: var(--mono);
+}
+.page-num:hover { color: var(--text); border-color: rgba(198, 167, 106, 0.5); }
+.page-num.on {
+  color: var(--gold);
+  border-color: rgba(198, 167, 106, 0.65);
+  background: rgba(198, 167, 106, 0.1);
+}

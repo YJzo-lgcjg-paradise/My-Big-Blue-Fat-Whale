@@ -6,6 +6,10 @@ import com.dayufish.domain.Space;
 import com.dayufish.repo.ImportJobRepository;
 import com.dayufish.repo.MemoryRepository;
 import com.dayufish.repo.SpaceRepository;
+import com.dayufish.repo.TreasureRepository;
+import com.dayufish.repo.EpisodeRepository;
+import com.dayufish.domain.Episode;
+import com.dayufish.domain.Treasure;
 import com.dayufish.web.Dtos;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,6 +45,8 @@ public class MemoryService {
     private final SummaryService summaries;
     private final StyleService styles;
     private final MediaService media;
+    private final TreasureRepository treasures;
+    private final EpisodeRepository episodes;
     private final EmbeddingService embeddings;
     private final ObjectMapper mapper;
     private final AtomicBoolean draining = new AtomicBoolean(false);
@@ -62,7 +68,7 @@ public class MemoryService {
 
     public MemoryService(SpaceRepository spaces, MemoryRepository memories, ImportJobRepository imports,
             ImportParser parser, SummaryService summaries, EmbeddingService embeddings, ObjectMapper mapper,
-            StyleService styles, MediaService media) {
+            StyleService styles, MediaService media, TreasureRepository treasures, EpisodeRepository episodes) {
         this.spaces = spaces;
         this.memories = memories;
         this.imports = imports;
@@ -70,6 +76,8 @@ public class MemoryService {
         this.summaries = summaries;
         this.styles = styles;
         this.media = media;
+        this.treasures = treasures;
+        this.episodes = episodes;
         this.embeddings = embeddings;
         this.mapper = mapper;
     }
@@ -253,6 +261,20 @@ public class MemoryService {
                 List.of(result.summary() + "\n" + (result.questionDigest() == null ? m.getQuestion() : result.questionDigest())));
 
         m.setSummary(result.summary());
+        String trTitle = result.treasureTitle() == null ? "" : result.treasureTitle().trim();
+        if (result.hasTreasure() && !trTitle.isEmpty()
+                && !treasures.existsBySpaceIdAndTitle(m.getSpaceId(), trTitle)
+                && !treasures.existsByMemoryId(m.getId())) {
+            Treasure tr = new Treasure();
+            tr.setSpaceId(m.getSpaceId());
+            tr.setMemoryId(m.getId());
+            tr.setKind(result.treasureKind() == null || result.treasureKind().isBlank() ? "其他" : result.treasureKind());
+            tr.setTitle(clip(trTitle, 40));
+            tr.setText(clip(result.treasureText(), 400));
+            tr.setWhy(clip(result.treasureWhy(), 200));
+            treasures.save(tr);
+            log.info("珍贵记忆入库：{}", tr.getTitle());
+        }
         m.setKeywords(String.join(",", result.keywords()));
         m.setImportance(result.importance());
         m.setStatus("ready");
@@ -275,6 +297,16 @@ public class MemoryService {
             n++;
         }
         return n;
+    }
+
+    public Space spaceOf(Long spaceId) {
+        return spaces.findById(spaceId).orElseThrow(() -> new IllegalArgumentException("记忆体不存在"));
+    }
+
+    public void setContextMode(Long spaceId, String mode) {
+        Space s = spaceOf(spaceId);
+        s.setContextMode("precision".equalsIgnoreCase(mode) ? "precision" : "budget");
+        spaces.save(s);
     }
 
     public Long spaceIdOf(Long memoryId) {
@@ -573,6 +605,255 @@ public class MemoryService {
 
     /** 给 AI 对话用的记忆上下文。 */
     public record Block(String text, List<Long> ids) {
+    }
+
+
+
+    /** 真给模型看的上下文：一个池子，按预算装 */
+    public Block chatContext(Long spaceId, String query) {
+        Space space = spaces.findById(spaceId).orElse(null);
+        if (space == null) {
+            return new Block("", List.of());
+        }
+        boolean precision = "precision".equalsIgnoreCase(space.getContextMode());
+        int budgetChars = (precision ? 24000 : 8000) * 2;      // 中文约 1 token ≈ 2 字
+        int recentLimit = precision ? 20 : 10;
+        int maxEvents = precision ? 2 : 1;
+        double eventFloor = precision ? 0.30 : 0.45;
+        double dialogFloor = precision ? 0.20 : 0.30;
+        double itemShare = precision ? 0.60 : 0.40;
+        int itemCap = (int) (budgetChars * itemShare);
+
+        StringBuilder sb = new StringBuilder();
+        int usedChars = 0;
+        List<Long> usedIds = new ArrayList<>();
+
+        // ① 固定层
+        String self = space.getPersonaSelf() == null ? "" : space.getPersonaSelf().trim();
+        if (!self.isEmpty()) {
+            sb.append("【我是谁】\n").append(self).append("\n\n");
+            usedChars += self.length();
+        }
+        String style = styles.block(spaceId);
+        if (style != null && !style.isBlank()) {
+            sb.append(style.trim()).append("\n\n");
+            usedChars += style.length();
+        }
+
+        // ② 候选：事件（日记一句 + 该事件全部对话原文）
+        List<Episode> all = episodes.findBySpaceIdOrderByStartedAtDesc(spaceId);
+        List<Episode> ready = new ArrayList<>();
+        for (Episode e : all) {
+            if ("ready".equals(e.getStatus()) && e.getDiary() != null && !e.getDiary().isBlank()) {
+                ready.add(e);
+            }
+        }
+        StringBuilder older = new StringBuilder();
+        for (Episode e : matchEpisodes(spaceId, query, ready, maxEvents, eventFloor)) {
+            StringBuilder block = new StringBuilder();
+            block.append("〔那时的事：").append(e.getTitle()).append("〕\n");
+            block.append("我当时记的：").append(clip(e.getDiary(), 160)).append('\n');
+            int chars = block.length();
+            List<Memory> turns = memories.findByEpisodeIdOrderByOccurredAtAscIdAsc(e.getId());
+            int shown = 0;
+            for (Memory m : turns) {
+                if (usedIds.contains(m.getId())) {
+                    continue;
+                }
+                String one = "他：" + (m.getQuestion() == null ? "" : m.getQuestion().trim())
+                        + "\n我：" + (m.getAnswer() == null ? "" : m.getAnswer().trim()) + "\n";
+                if (chars + one.length() > itemCap && shown > 0) {
+                    break;
+                }
+                block.append(one);
+                chars += one.length();
+                usedIds.add(m.getId());
+                shown++;
+            }
+            if (shown > 0 && usedChars + block.length() <= budgetChars) {
+                older.append(block).append('\n');
+                usedChars += block.length();
+            }
+        }
+
+        // ③ 候选：对话记忆检索（单轮原文）
+        try {
+            RecallResult rr = recall(spaceId, query, false, 6);
+            int n = 0;
+            StringBuilder hits = new StringBuilder();
+            for (Dtos.MemoryView v : rr.items()) {
+                if (n >= 3 || usedChars + hits.length() > budgetChars) {
+                    break;
+                }
+                if (usedIds.contains(v.id())) {
+                    continue;
+                }
+                double sc = v.score() == null ? 0 : v.score();
+                if (sc < dialogFloor) {
+                    continue;
+                }
+                Memory m = memories.findById(v.id()).orElse(null);
+                if (m == null) {
+                    continue;
+                }
+                String one = "〔原话〕他：" + (m.getQuestion() == null ? "" : m.getQuestion().trim())
+                        + "\n我：" + (m.getAnswer() == null ? "" : m.getAnswer().trim()) + "\n";
+                if (one.length() > itemCap) {
+                    one = one.substring(0, itemCap) + "…\n";
+                }
+                hits.append(one);
+                usedIds.add(m.getId());
+                n++;
+            }
+            if (hits.length() > 0 && usedChars + hits.length() <= budgetChars) {
+                older.append(hits);
+                usedChars += hits.length();
+            }
+        } catch (Exception ignored) {
+            // 检索失败不影响主流程
+        }
+
+        if (older.length() > 0) {
+            sb.append("【更早的对话原文】\n").append(older).append('\n');
+        }
+
+        // ④ 最近上下文：始终保留，不受池子竞争影响
+        List<Memory> rows = memories.findBySpaceIdOrderByOccurredAtDesc(spaceId);
+        List<Memory> recent = new ArrayList<>();
+        for (Memory m : rows) {
+            if (!"ready".equals(m.getStatus())) {
+                continue;
+            }
+            if (usedIds.contains(m.getId())) {
+                continue;
+            }
+            recent.add(m);
+            if (recent.size() >= recentLimit) {
+                break;
+            }
+        }
+        if (!recent.isEmpty()) {
+            sb.append("【最近聊过的原话】\n");
+            for (int i = recent.size() - 1; i >= 0; i--) {
+                Memory m = recent.get(i);
+                sb.append("他：").append(m.getQuestion() == null ? "" : m.getQuestion().trim()).append('\n');
+                sb.append("我：").append(m.getAnswer() == null ? "" : m.getAnswer().trim()).append("\n\n");
+                usedIds.add(m.getId());
+            }
+        }
+
+        return new Block(sb.toString(), usedIds);
+    }
+
+    /** 用问题向量 + 词面，找最贴近的事件 */
+    private List<Episode> matchEpisodes(Long spaceId, String query, List<Episode> ready, int top, double floor) {
+        if (ready.isEmpty() || query == null || query.isBlank()) {
+            return List.of();
+        }
+        float[] qv = null;
+        try {
+            var r = embeddings.embedAll(List.of(query));
+            qv = r.vectors().isEmpty() ? null : r.vectors().get(0);
+        } catch (Exception ignored) {
+            qv = null;
+        }
+        List<Episode> hits = new ArrayList<>();
+        List<Double> scores = new ArrayList<>();
+        for (Episode e : ready) {
+            double sim = 0;
+            if (qv != null && e.getEmbedding() != null) {
+                float[] ev = decode(e.getEmbedding());
+                if (ev != null && ev.length == qv.length) {
+                    sim = Math.max(0, EmbeddingService.cosine(qv, ev));
+                }
+            }
+            String text = (e.getTitle() == null ? "" : e.getTitle()) + " "
+                    + (e.getDiary() == null ? "" : e.getDiary());
+            double lex = lexicalHit(query, text);
+            if (lex > sim) {
+                sim = lex;
+            }
+            if (sim >= floor) {
+                hits.add(e);
+                scores.add(sim);
+            }
+        }
+        List<Integer> idx = new ArrayList<>();
+        for (int i = 0; i < hits.size(); i++) {
+            idx.add(i);
+        }
+        idx.sort((a, b) -> Double.compare(scores.get(b), scores.get(a)));
+        List<Episode> out = new ArrayList<>();
+        for (int i = 0; i < idx.size() && i < top; i++) {
+            out.add(hits.get(idx.get(i)));
+        }
+        return out;
+    }
+
+    /** 问题里 4 字以上的片段，有多少能在事件文本里找到 */
+    private static double lexicalHit(String query, String text) {
+        if (query == null || text == null || text.isBlank()) {
+            return 0;
+        }
+        String q = query.replaceAll("\\s+", "");
+        String hay = text.replaceAll("\\s+", "");
+        if (q.length() < 4) {
+            return hay.contains(q) ? 0.8 : 0;
+        }
+        int total = 0;
+        int hit = 0;
+        for (int i = 0; i + 4 <= q.length(); i += 2) {
+            total++;
+            if (hay.contains(q.substring(i, i + 4))) {
+                hit++;
+            }
+        }
+        return total == 0 ? 0 : Math.min(0.9, (double) hit / total);
+    }
+
+    /** 用问题向量找最贴近的事件（没有向量就退回标题包含） */
+    private List<Episode> matchEpisodes(Long spaceId, String query, List<Episode> ready, int top) {
+        if (ready.isEmpty() || query == null || query.isBlank()) {
+            return List.of();
+        }
+        float[] qv = null;
+        try {
+            var r = embeddings.embedAll(List.of(query));
+            qv = r.vectors().isEmpty() ? null : r.vectors().get(0);
+        } catch (Exception ignored) {
+            qv = null;
+        }
+        List<Episode> hits = new ArrayList<>();
+        List<Double> scores = new ArrayList<>();
+        for (Episode e : ready) {
+            double sim = 0;
+            if (qv != null && e.getEmbedding() != null) {
+                float[] ev = decode(e.getEmbedding());
+                if (ev != null && ev.length == qv.length) {
+                    sim = Math.max(0, EmbeddingService.cosine(qv, ev));
+                }
+            }
+            // 词面兜底：向量不靠谱时（本地哈希向量），靠问题里的词能不能在事件里找到
+            double lex = lexicalHit(query, (e.getTitle() == null ? "" : e.getTitle()) + " "
+                    + (e.getDiary() == null ? "" : e.getDiary()));
+            if (lex > sim) {
+                sim = lex;
+            }
+            if (sim > 0.30) {
+                hits.add(e);
+                scores.add(sim);
+            }
+        }
+        List<Integer> idx = new ArrayList<>();
+        for (int i = 0; i < hits.size(); i++) {
+            idx.add(i);
+        }
+        idx.sort((a, b) -> Double.compare(scores.get(b), scores.get(a)));
+        List<Episode> out = new ArrayList<>();
+        for (int i = 0; i < idx.size() && i < top; i++) {
+            out.add(hits.get(idx.get(i)));
+        }
+        return out;
     }
 
     public Block memoryBlock(Long spaceId, String query) {

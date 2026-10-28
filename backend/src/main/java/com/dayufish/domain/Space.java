@@ -36,6 +36,16 @@ public class Space {
     private Integer styleSamples = 0;
 
     /** 用户挑出来当风格样例的记忆 id，逗号分隔 */
+    /** budget = 预算优先；precision = 精准优先 */
+    @Column(name = "context_mode", length = 20)
+    private String contextMode = "budget";
+
+    @Column(name = "persona_self", length = 4000)
+    private String personaSelf = "";
+
+    @Column(name = "persona_self_at")
+    private Instant personaSelfAt;
+
     @Column(name = "style_picks", length = 600)
     private String stylePicks = "";
 
@@ -98,6 +108,30 @@ public class Space {
 
     public void setStyleSamples(Integer styleSamples) {
         this.styleSamples = styleSamples;
+    }
+
+    public String getContextMode() {
+        return contextMode == null ? "budget" : contextMode;
+    }
+
+    public void setContextMode(String contextMode) {
+        this.contextMode = contextMode;
+    }
+
+    public String getPersonaSelf() {
+        return personaSelf;
+    }
+
+    public void setPersonaSelf(String personaSelf) {
+        this.personaSelf = personaSelf;
+    }
+
+    public Instant getPersonaSelfAt() {
+        return personaSelfAt;
+    }
+
+    public void setPersonaSelfAt(Instant personaSelfAt) {
+        this.personaSelfAt = personaSelfAt;
     }
 
     public String getStylePicks() {

@@ -20,9 +20,17 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
     picks: { id: number; question: string; answer: string }[];
   } | null>(null);
   const [styleBusy, setStyleBusy] = useState(false);
+  const [selfText, setSelfText] = useState("");
+  const [ctxMode, setCtxMode] = useState<"budget" | "precision">("budget");
+  const [historyKind, setHistoryKind] = useState<"self" | "style" | null>(null);
+  const [historyItems, setHistoryItems] = useState<{ id: number; text: string; createdAt: string }[]>([]);
+  const [selfBasis, setSelfBasis] = useState<string[]>([]);
+  const [selfBusy, setSelfBusy] = useState(false);
   const [candidates, setCandidates] = useState<{ id: number; question: string; summary: string }[]>([]);
   const [picked, setPicked] = useState<number[]>([]);
   const [picksBusy, setPicksBusy] = useState(false);
+  const [pickQuery, setPickQuery] = useState("");
+  const [pickSearching, setPickSearching] = useState(false);
 
   useEffect(() => {
     setStyle(null);
@@ -35,6 +43,8 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
       const rows = (r.items || []).map((m: any) => ({ id: m.id, question: m.question, summary: m.summary }));
       if (s) {
         setStyle(s);
+        api.getSelf(spaceId).then((r) => setSelfText(r.text || "")).catch(() => {});
+        api.getContextMode(spaceId).then((r) => setCtxMode(r.mode === "precision" ? "precision" : "budget")).catch(() => {});
         const ids = (s.picks || []).map((p) => p.id);
         setPicked(ids);
         // 已选但不在最近 30 条里的，补到列表最前面，保证勾选可见
@@ -48,6 +58,43 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
     });
   }, [spaceId]);
 
+  async function openHistory(kind: "self" | "style") {
+    setHistoryKind(kind);
+    setHistoryItems([]);
+    try {
+      const r = await api.history(spaceId, kind);
+      setHistoryItems(r.items);
+    } catch (e: any) {
+      toast(e.message || "读取历史失败");
+    }
+  }
+
+  async function genSelf() {
+    setSelfBusy(true);
+    try {
+      const res = await api.generateSelf(spaceId);
+      setSelfText(res.text || "");
+      setSelfBasis(res.basis || []);
+      toast("已经写完「我是谁」");
+    } catch (e: any) {
+      toast(e.message || "生成失败");
+    } finally {
+      setSelfBusy(false);
+    }
+  }
+
+  async function saveSelfText() {
+    setSelfBusy(true);
+    try {
+      await api.saveSelf(spaceId, selfText);
+      toast("已保存");
+    } catch (e: any) {
+      toast(e.message || "保存失败");
+    } finally {
+      setSelfBusy(false);
+    }
+  }
+
   async function restyleAll() {
     if (!confirm("按当前说话方式重写这个记忆体的全部总结？会逐条重新调用模型，条数多时要跑一阵。")) return;
     setStyleBusy(true);
@@ -59,6 +106,21 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
       toast(e.message || "重写失败");
     } finally {
       setStyleBusy(false);
+    }
+  }
+
+  async function searchPicks(q: string) {
+    setPickSearching(true);
+    try {
+      const r = await api.styleCandidates(spaceId, q, 60);
+      // 已选中的哪怕这次没搜到，也保留在列表里，避免勾选丢失
+      const rows = r.items;
+      const missing = candidates.filter((c) => picked.includes(c.id) && !rows.some((x) => x.id === c.id));
+      setCandidates([...missing, ...rows.map((m) => ({ id: m.id, question: m.question, summary: m.answer }))]);
+    } catch (e: any) {
+      toast(e.message || "搜索失败");
+    } finally {
+      setPickSearching(false);
     }
   }
 
@@ -149,6 +211,73 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
       </div>
 
       <div className="panel">
+        <h3>上下文模式</h3>
+        <p className="hint" style={{ marginBottom: 10 }}>
+          决定每轮给模型看多少记忆。预算优先把上下文压在 8k token 内；精准优先不设总预算（安全上限 24k），
+          最近上下文带到 20 条，命中门槛也放得更宽。
+        </p>
+        <div className="row">
+          <button
+            className={"chip" + (ctxMode === "budget" ? " on" : "")}
+            onClick={async () => {
+              await api.setContextMode(spaceId, "budget");
+              setCtxMode("budget");
+              toast("已切到预算优先");
+            }}
+          >
+            预算优先
+          </button>
+          <button
+            className={"chip" + (ctxMode === "precision" ? " on" : "")}
+            onClick={async () => {
+              await api.setContextMode(spaceId, "precision");
+              setCtxMode("precision");
+              toast("已切到精准优先");
+            }}
+          >
+            精准优先
+          </button>
+        </div>
+        <p className="hint" style={{ marginTop: 8 }}>
+          {ctxMode === "budget"
+            ? "当前：8k 预算 · 最近 10 条 · 事件最多 1 个 · 事件门槛 0.45 / 对话 0.30"
+            : "当前：不设预算（上限 24k）· 最近 20 条 · 事件最多 2 个 · 事件门槛 0.30 / 对话 0.20"}
+        </p>
+      </div>
+
+      <div className="panel">
+        <h3>我是谁？</h3>
+        <p className="hint" style={{ marginBottom: 10 }}>
+          从这个记忆体已整理的事件里提炼一段第一人称自述：我是他的谁、我怎么对他、我不做什么。
+          续命包会把它放在最前面，比说话方式更靠前。
+        </p>
+        <div className="prose-box">
+        <textarea
+          className="prose-input"
+          value={selfText}
+          placeholder="还没有写。点下面的「生成」会让它读一遍事件日记，写出一段；也可以自己改。"
+          onChange={(e) => setSelfText(e.target.value)}
+        />
+        </div>
+        {selfBasis.length > 0 && (
+          <p className="hint" style={{ marginTop: 8 }}>
+            依据：{selfBasis.slice(0, 6).join(" · ")}
+          </p>
+        )}
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="btn ghost" onClick={genSelf} disabled={selfBusy}>
+            {selfBusy ? "生成中…" : selfText ? "重新生成" : "生成"}
+          </button>
+          <button className="btn ghost" onClick={saveSelfText} disabled={selfBusy}>
+            保存修改
+          </button>
+          <button className="btn ghost" onClick={() => openHistory("self")}>
+            查看过往
+          </button>
+        </div>
+      </div>
+
+      <div className="panel">
         <h3>说话方式</h3>
         {style?.style ? (
           <>
@@ -156,7 +285,9 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
               从 {style.samples} 条回答里总结，之后 AI 对话按这个语气回答
               {style.updatedAt ? ` · 更新于 ${new Date(style.updatedAt).toLocaleString()}` : ""}
             </p>
-            <p style={{ color: "var(--text)", fontSize: 13.5, lineHeight: 1.8 }}>{style.style}</p>
+            <div className="prose-box">
+              <p className="prose-text">{style.style}</p>
+            </div>
           </>
         ) : (
           <p className="hint">还没有总结过。它会翻这个记忆体里助手的回答，看出它说话的语气、结构和口癖，之后照着回。</p>
@@ -170,12 +301,39 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
               按这个语气重写全部总结
             </button>
           )}
+          <button className="btn ghost" onClick={() => openHistory("style")}>
+            查看过往
+          </button>
         </div>
 
         <div style={{ marginTop: 20, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
           <p className="hint" style={{ marginBottom: 8 }}>
-            还可以手挑几条对话塞进提示词当语气样例（最多 8 条，已选 {picked.length} 条）。
+            还可以手挑几条对话塞进固定提示词当语气样例（最多 8 条，已选 {picked.length} 条）。
+            选中的会和「我是谁」「说话方式」一起，每轮都发；
           </p>
+          <div className="row" style={{ marginBottom: 8 }}>
+            <input
+              className="input grow"
+              placeholder="搜原文，比如「当时明月在」或某句你记得的话"
+              value={pickQuery}
+              onChange={(e) => setPickQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && searchPicks(pickQuery)}
+            />
+            <button className="btn ghost" onClick={() => searchPicks(pickQuery)} disabled={pickSearching}>
+              {pickSearching ? "搜索中…" : "搜索"}
+            </button>
+            {pickQuery && (
+              <button
+                className="btn ghost"
+                onClick={() => {
+                  setPickQuery("");
+                  searchPicks("");
+                }}
+              >
+                清空
+              </button>
+            )}
+          </div>
           <div className="pick-list">
             {candidates.map((m) => {
               const on = picked.includes(m.id);
@@ -242,6 +400,28 @@ export function Settings({ health, stats, spaceId, spaceName, onChanged, onDelet
           想看原始对话，每条记忆点开都有原文。
         </p>
       </div>
+      {historyKind && (
+        <div className="modal-mask" onClick={() => setHistoryKind(null)}>
+          <div className="modal-card" style={{ width: "min(720px, 92vw)" }} onClick={(e) => e.stopPropagation()}>
+            <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+              <h3>{historyKind === "self" ? "「我是谁」的过往版本" : "说话方式的过往版本"}</h3>
+              <button className="icon-btn" onClick={() => setHistoryKind(null)}>✕</button>
+            </div>
+            {historyItems.length === 0 ? (
+              <p className="hint">还没有历史版本。以后再生成或修改，旧的那份会自动存到这里。</p>
+            ) : (
+              <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+                {historyItems.map((h) => (
+                  <div key={h.id} className="hist-item">
+                    <p className="hint" style={{ marginBottom: 6 }}>{new Date(h.createdAt).toLocaleString()}</p>
+                    <p className="prose-text" style={{ margin: 0 }}>{h.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }

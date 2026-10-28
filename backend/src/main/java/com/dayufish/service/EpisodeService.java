@@ -630,6 +630,10 @@ public class EpisodeService {
         }
 
         StringBuilder sb = new StringBuilder();
+        String selfText = spaces.findById(spaceId).map(s -> s.getPersonaSelf() == null ? "" : s.getPersonaSelf()).orElse("");
+        if (!selfText.isBlank()) {
+            sb.append("【我是谁】\n").append(selfText.trim()).append("\n\n");
+        }
         sb.append("【你们最近在做什么】\n");
         List<String> threads = new ArrayList<>();
         Episode last = null;

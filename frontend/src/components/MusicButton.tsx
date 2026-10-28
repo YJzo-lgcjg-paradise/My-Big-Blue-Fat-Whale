@@ -1,14 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { MusicIcon } from "./MusicIcon";
 
+type Props = {
+  /** 正在播的曲子；开场用 intro-theme，进入应用后换成 app-theme */
+  src?: string;
+};
+
 /**
- * 全局背景音乐：挂一次，开场、黑幕、应用内都在。
+ * 全局背景音乐：挂一次，开场用开场曲，进入应用后换曲子（保持播放状态）。
  * 浏览器会拦自动播放，所以先试一次，被拦了就在第一次点击/按键时补上。
  */
-export function MusicButton() {
+export function MusicButton({ src = "/autumn/intro-theme.mp3" }: Props) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const startedRef = useRef(false);
   const [playing, setPlaying] = useState(false);
+  const srcRef = useRef(src);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -41,6 +47,26 @@ export function MusicButton() {
     };
   }, []);
 
+  // 换曲子：开场 → 应用内
+  useEffect(() => {
+    if (srcRef.current === src) return;
+    srcRef.current = src;
+    const audio = audioRef.current;
+    if (!audio) return;
+    const wasPlaying = !audio.paused || startedRef.current;
+    audio.src = src;
+    audio.load();
+    if (wasPlaying) {
+      audio
+        .play()
+        .then(() => {
+          startedRef.current = true;
+          setPlaying(true);
+        })
+        .catch(() => {});
+    }
+  }, [src]);
+
   function toggle() {
     const audio = audioRef.current;
     if (!audio) return;
@@ -68,7 +94,7 @@ export function MusicButton() {
       >
         <MusicIcon playing={playing} />
       </button>
-      <audio ref={audioRef} src="/autumn/intro-theme.mp3" loop preload="auto" />
+      <audio ref={audioRef} src={src} loop preload="auto" />
     </>
   );
 }
